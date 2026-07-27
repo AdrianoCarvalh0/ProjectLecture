@@ -134,6 +134,9 @@ services:
   worker:
     <<: *app
     command: celery -A config worker -l INFO --concurrency=1 --max-tasks-per-child=40
+    networks:
+      - backend
+      - edge
     depends_on:
       db:
         condition: service_healthy
