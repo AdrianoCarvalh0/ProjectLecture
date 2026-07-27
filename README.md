@@ -182,10 +182,14 @@ passa `AZURE_LOCATION` explicitamente ao Bicep, mesmo quando o grupo de recursos
 já existe em outra região; a localização do grupo não é alterada:
 
 ```bash
+./scripts/azure/find-vm-option.sh
+# Execute a combinação sugerida, por exemplo:
 AZURE_VM_SIZE=Standard_B2ats_v2 ./scripts/azure/provision.sh
-# Alternativa:
 AZURE_LOCATION=eastus2 AZURE_VM_SIZE=Standard_B1s ./scripts/azure/provision.sh
 ```
+
+O verificador executa apenas a validação ARM nas famílias gratuitas x86 e não
+cria recursos.
 
 Depois do primeiro deploy, crie o administrador:
 
