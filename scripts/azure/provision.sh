@@ -40,10 +40,21 @@ fi
 
 ssh_public_key="$(<"${AZURE_SSH_KEY_PATH}.pub")"
 
-az group create \
-    --name "$AZURE_RESOURCE_GROUP" \
-    --location "$AZURE_LOCATION" \
-    --output none
+if [[ "$(az group exists --name "$AZURE_RESOURCE_GROUP")" != "true" ]]; then
+    az group create \
+        --name "$AZURE_RESOURCE_GROUP" \
+        --location "$AZURE_LOCATION" \
+        --output none
+else
+    resource_group_location="$(
+        az group show \
+            --name "$AZURE_RESOURCE_GROUP" \
+            --query location \
+            --output tsv
+    )"
+    echo "Reutilizando o grupo $AZURE_RESOURCE_GROUP em $resource_group_location."
+    echo "Os novos recursos serão implantados em $AZURE_LOCATION."
+fi
 
 az deployment group create \
     --name projectlecture-infra \
