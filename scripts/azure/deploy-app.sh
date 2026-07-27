@@ -51,6 +51,7 @@ ssh "${ssh_options[@]}" "$target" "
     cd /opt/projectlecture
     chmod 600 .env.prod
     docker compose --env-file .env.prod -f docker-compose.prod.yml config --quiet
+    docker compose --env-file .env.prod -f docker-compose.prod.yml build --pull web
     sudo systemctl daemon-reload
     sudo systemctl enable projectlecture.service
     sudo systemctl restart projectlecture.service
