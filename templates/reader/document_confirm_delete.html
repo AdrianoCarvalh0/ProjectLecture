@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Excluir documento · ProjectLecture{% endblock %}
+{% block content %}
+<div class="confirm-card section-card">
+    <div class="danger-icon"><i class="fa-solid fa-trash"></i></div>
+    <p class="eyebrow">Excluir documento</p>
+    <h1>Remover “{{ object.title }}”?</h1>
+    <p>O texto, o arquivo, o áudio e o progresso salvo serão excluídos. Esta ação não pode ser desfeita.</p>
+    <form method="post" class="d-flex justify-content-center gap-2 mt-4">
+        {% csrf_token %}
+        <a class="btn btn-outline-secondary" href="{{ object.get_absolute_url }}">Cancelar</a>
+        <button class="btn btn-danger" type="submit">Excluir definitivamente</button>
+    </form>
+</div>
+{% endblock %}

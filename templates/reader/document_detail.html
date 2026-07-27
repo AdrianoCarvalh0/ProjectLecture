@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}{{ document.title }} · ProjectLecture{% endblock %}
+{% block content %}
+<div class="reader-header">
+    <div>
+        <a class="back-link" href="{% url 'reader:document-list' %}"><i class="fa-solid fa-arrow-left"></i> Biblioteca</a>
+        <div class="d-flex align-items-center gap-2 mt-3 mb-2">
+            <span class="status-badge status-{{ document.status }}"><span></span>{{ document.get_status_display }}</span>
+            <span class="text-muted small">{{ document.get_source_type_display }}</span>
+        </div>
+        <h1>{{ document.title }}</h1>
+        <p>{{ document.char_count }} caracteres · {{ document.voice.name }} · {{ document.get_reading_mode_display }} · {{ document.speed }} ppm</p>
+    </div>
+    <div class="reader-actions">
+        <button class="btn btn-primary" type="button" data-bs-toggle="modal" data-bs-target="#changeVoiceModal"
+                {% if document.status == 'processing' or document.stream_is_building %}disabled{% endif %}>
+            <i class="fa-solid fa-microphone-lines me-2"></i>Trocar voz
+        </button>
+        {% if document.original_file %}<a class="btn btn-outline-secondary" href="{{ document.original_file.url }}" download><i class="fa-solid fa-file-arrow-down me-2"></i>Original</a>{% endif %}
+        <div class="dropdown">
+            <button class="btn btn-outline-secondary" data-bs-toggle="dropdown"><i class="fa-solid fa-ellipsis"></i></button>
+            <ul class="dropdown-menu dropdown-menu-end">
+                <li>
+                    <form method="post" action="{% url 'reader:document-regenerate' document.pk %}">{% csrf_token %}<button class="dropdown-item" type="submit" {% if document.status == 'processing' or document.stream_is_building %}disabled{% endif %}><i class="fa-solid fa-rotate me-2"></i>Gerar novamente</button></form>
+                </li>
+                <li><a class="dropdown-item text-danger" href="{% url 'reader:document-delete' document.pk %}"><i class="fa-solid fa-trash me-2"></i>Excluir</a></li>
+            </ul>
+        </div>
+    </div>
+</div>
+
+{% if document.status == 'failed' %}
+<div class="alert alert-danger d-flex align-items-start gap-3">
+    <i class="fa-solid fa-triangle-exclamation mt-1"></i>
+    <div><strong>Não foi possível gerar o áudio.</strong><div>{{ document.error_message }}</div></div>
+</div>
+{% elif document.status != 'ready' %}
+<div class="processing-card" id="processingState" data-status-url="/api/documents/{{ document.pk }}/">
+    <span class="processing-animation"><i class="fa-solid fa-wave-square"></i></span>
+    <div><h2>Preparando sua leitura</h2><p>O texto está sendo dividido e narrado. Esta página será atualizada quando o áudio estiver pronto.</p></div>
+    <span class="spinner-border spinner-border-sm text-primary" role="status"></span>
+</div>
+{% endif %}
+
+<div class="reader-layout">
+    <section class="reading-pane">
+        <div class="reading-toolbar">
+            <div><i class="fa-solid fa-align-left"></i> Texto extraído</div>
+            <span id="readingPosition">Início do documento</span>
+        </div>
+        <article class="reading-text" id="readingText">
+            {% for token in reading_tokens %}{% if token.is_word %}<span class="reading-word" tabindex="0" role="button" data-char-start="{{ token.start_char }}" data-char-end="{{ token.end_char }}">{{ token.text }}</span>{% else %}{{ token.text }}{% endif %}{% endfor %}
+        </article>
+    </section>
+    <aside class="player-pane">
+        <div class="player-card" id="readerPlayer"
+             data-manifest-url="/api/documents/{{ document.pk }}/stream/"
+             data-progress-url="/api/documents/{{ document.pk }}/progress/"
+             data-csrf="{{ csrf_token }}"
+             data-resume="{% if document.reading_progress %}{{ document.reading_progress.position_seconds }}{% else %}0{% endif %}"
+             data-resume-char="{% if document.reading_progress %}{{ document.reading_progress.char_offset }}{% else %}0{% endif %}">
+            <div class="player-art{% if document.voice.avatar %} has-narrator{% endif %}">
+                {% if document.voice.avatar %}
+                <img src="{% static document.voice.avatar %}" alt="Avatar de {{ document.voice.name }}">
+                {% else %}
+                <i class="fa-solid fa-wave-square"></i>
+                {% endif %}
+                <div class="sound-bars"><span></span><span></span><span></span><span></span></div>
+                <span class="narrator-badge">{{ document.voice.quality_label }}</span>
+            </div>
+            <p class="eyebrow">Reproduzindo</p>
+            <h2>{{ document.title }}</h2>
+            <p>{{ document.voice.name }}</p>
+            {% if document.status == 'ready' and stream_available %}
+            <audio id="audioPlayer" preload="metadata"></audio>
+            <div class="time-row"><span id="currentTime">00:00</span><span id="totalTime">--:--</span></div>
+            <input class="player-range" id="seekRange" type="range" min="0" max="{{ document.duration_seconds }}" value="0" step="0.1" aria-label="Posição do áudio">
+            <div class="player-controls">
+                <button type="button" id="backButton" aria-label="Voltar 15 segundos"><i class="fa-solid fa-rotate-left"></i><small>15</small></button>
+                <button class="play-button" type="button" id="playButton" aria-label="Reproduzir"><i class="fa-solid fa-play"></i></button>
+                <button type="button" id="forwardButton" aria-label="Avançar 15 segundos"><i class="fa-solid fa-rotate-right"></i><small>15</small></button>
+            </div>
+            <div class="player-footer">
+                <label for="playbackRate"><i class="fa-solid fa-gauge-high me-2"></i>Reprodução</label>
+                <select id="playbackRate" class="form-select form-select-sm">
+                    <option value="0.75">0,75×</option>
+                    <option value="1" selected>1×</option>
+                    <option value="1.25">1,25×</option>
+                    <option value="1.5">1,5×</option>
+                    <option value="2">2×</option>
+                </select>
+            </div>
+            <div class="stream-status" id="streamStatus" aria-live="polite">Preparando o leitor…</div>
+            {% if document.audio_file %}
+            <a class="btn btn-outline-primary w-100 mt-3" href="{{ document.audio_file.url }}" download><i class="fa-solid fa-download me-2"></i>Baixar áudio WAV</a>
+            {% endif %}
+            {% else %}
+            <div class="player-waiting"><i class="fa-solid fa-hourglass-half"></i><span>Player disponível ao terminar</span></div>
+            {% endif %}
+        </div>
+    </aside>
+</div>
+
+<div class="modal fade" id="changeVoiceModal" tabindex="-1" aria-labelledby="changeVoiceTitle" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content voice-modal">
+            <form method="post" action="{% url 'reader:document-regenerate' document.pk %}">
+                {% csrf_token %}
+                <div class="modal-header">
+                    <div>
+                        <p class="eyebrow mb-1">Nova narração</p>
+                        <h2 class="modal-title" id="changeVoiceTitle">Escolha uma das quatro vozes</h2>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="voice-picker voice-picker-grid mb-4" role="radiogroup" aria-label="Voz para regenerar">
+                        {% for voice in regenerate_form.fields.voice.queryset %}
+                        <label class="voice-option{% if regenerate_form.voice.value|stringformat:'s' == voice.pk|stringformat:'s' %} selected{% endif %}">
+                            <input type="radio" name="voice" value="{{ voice.pk }}"
+                                   {% if regenerate_form.voice.value|stringformat:'s' == voice.pk|stringformat:'s' %}checked{% endif %}>
+                            <span class="voice-avatar">
+                                {% if voice.avatar %}
+                                <img src="{% static voice.avatar %}" alt="">
+                                {% else %}
+                                <i class="fa-solid fa-wave-square"></i>
+                                {% endif %}
+                            </span>
+                            <span class="voice-copy">
+                                <span class="voice-name-row"><strong>{{ voice.name }}</strong><em>{{ voice.quality_label }}</em></span>
+                                <small>{{ voice.style_label }}</small>
+                                <button class="voice-preview" type="button"
+                                        data-preview-url="{% url 'reader:voice-preview' voice.pk %}"
+                                        aria-label="Ouvir amostra da voz {{ voice.name }}">
+                                    <i class="fa-solid fa-circle-play"></i> Ouvir amostra
+                                </button>
+                            </span>
+                            <span class="voice-check"><i class="fa-solid fa-check"></i></span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label" for="{{ regenerate_form.reading_mode.id_for_label }}">{{ regenerate_form.reading_mode.label }}</label>
+                            {{ regenerate_form.reading_mode }}
+                        </div>
+                        <div class="col-md-6">
+                            <div class="d-flex justify-content-between">
+                                <label class="form-label" for="{{ regenerate_form.speed.id_for_label }}">Velocidade</label>
+                                <strong><span id="speedValue">{{ document.speed }}</span> ppm</strong>
+                            </div>
+                            {{ regenerate_form.speed }}
+                            <div class="range-labels"><span>Mais calma</span><span>Mais rápida</span></div>
+                        </div>
+                    </div>
+                    <div class="privacy-note mt-4">
+                        <i class="fa-solid fa-rotate"></i>
+                        <div><strong>O texto não será alterado</strong><span>Somente o áudio será gerado novamente com estas opções.</span></div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button class="btn btn-primary" type="submit"><i class="fa-solid fa-wand-magic-sparkles me-2"></i>Gerar novo áudio</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block extra_js %}
+{% if document.status == 'ready' and stream_available %}
+<script src="{% static 'js/player.js' %}"></script>
+{% else %}
+<script>
+window.ProjectLecture.pollDocumentStatus();
+</script>
+{% endif %}
+{% endblock %}

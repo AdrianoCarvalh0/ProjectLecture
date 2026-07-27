@@ -1,0 +1,8 @@
+# O PyTorch é instalado separadamente no Dockerfile.neural para permitir
+# selecionar os índices CPU ou CUDA sem afetar as demais dependências.
+fastapi==0.116.2
+uvicorn[standard]==0.35.0
+kokoro==0.9.4
+phonemizer-fork==3.3.2
+soundfile==0.13.1
+numpy==2.4.6

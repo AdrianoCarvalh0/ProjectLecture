@@ -1,0 +1,35 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/models/huggingface
+
+WORKDIR /app
+
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+ARG TORCH_VERSION=2.13.0
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        espeak-ng \
+        git \
+        libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY neural_tts/requirements.txt /tmp/requirements.txt
+RUN pip install --upgrade pip \
+    && pip install "torch==${TORCH_VERSION}" --index-url "${TORCH_INDEX_URL}" \
+    && pip install -r /tmp/requirements.txt
+
+COPY neural_tts /app/neural_tts
+
+RUN groupadd --gid 10002 ttsuser \
+    && useradd --uid 10002 --gid ttsuser --create-home ttsuser \
+    && mkdir -p /models/huggingface \
+    && chown -R ttsuser:ttsuser /app /models
+
+USER ttsuser
+
+EXPOSE 8100
+CMD ["uvicorn", "neural_tts.app:app", "--host", "0.0.0.0", "--port", "8100", "--workers", "1"]

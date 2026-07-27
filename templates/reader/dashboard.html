@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Visão geral · ProjectLecture{% endblock %}
+{% block content %}
+<div class="page-header">
+    <div>
+        <p class="eyebrow">Visão geral</p>
+        <h1>Olá, {{ user.username }}.</h1>
+        <p>Continue uma leitura ou transforme um novo documento em áudio.</p>
+    </div>
+    <a class="btn btn-primary btn-lg" href="{% url 'reader:document-create' %}"><i class="fa-solid fa-plus me-2"></i>Novo documento</a>
+</div>
+
+<div class="row g-4 mb-4">
+    <div class="col-sm-6 col-xl-3">
+        <div class="metric-card">
+            <div class="metric-icon purple"><i class="fa-solid fa-book"></i></div>
+            <div><span>Na biblioteca</span><strong>{{ total }}</strong><small>documento{{ total|pluralize }}</small></div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+        <div class="metric-card">
+            <div class="metric-icon green"><i class="fa-solid fa-circle-check"></i></div>
+            <div><span>Prontos para ouvir</span><strong>{{ ready }}</strong><small>áudio{{ ready|pluralize }}</small></div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+        <div class="metric-card">
+            <div class="metric-icon amber"><i class="fa-solid fa-spinner"></i></div>
+            <div><span>Em processamento</span><strong>{{ processing }}</strong><small>na fila agora</small></div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+        <div class="metric-card">
+            <div class="metric-icon blue"><i class="fa-solid fa-font"></i></div>
+            <div><span>Conteúdo importado</span><strong>{{ characters }}</strong><small>caracteres</small></div>
+        </div>
+    </div>
+</div>
+
+<div class="section-card">
+    <div class="section-card-header">
+        <div><h2>Leituras recentes</h2><p>Seus últimos documentos e o progresso salvo.</p></div>
+        <a href="{% url 'reader:document-list' %}">Ver biblioteca <i class="fa-solid fa-arrow-right ms-1"></i></a>
+    </div>
+    {% if recent_documents %}
+    <div class="document-grid">
+        {% for document in recent_documents %}
+        <a class="document-card" href="{{ document.get_absolute_url }}">
+            <div class="document-card-top">
+                <span class="file-icon {{ document.source_type }}"><i class="fa-solid {% if document.source_type == 'text' %}fa-align-left{% else %}fa-file-lines{% endif %}"></i></span>
+                <span class="status-badge status-{{ document.status }}"><span></span>{{ document.get_status_display }}</span>
+            </div>
+            <h3>{{ document.title }}</h3>
+            <p>{{ document.get_source_type_display }} · {{ document.char_count }} caracteres</p>
+            <div class="progress-track"><span style="width: {{ document.progress_percent }}%"></span></div>
+            <div class="document-card-meta"><span>{{ document.progress_percent }}% ouvido</span><span>{{ document.created_at|date:"d/m/Y" }}</span></div>
+        </a>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <div class="empty-icon"><i class="fa-solid fa-headphones"></i></div>
+        <h3>Sua biblioteca começa aqui</h3>
+        <p>Cole um texto ou envie um PDF, DOCX, EPUB ou TXT para gerar seu primeiro áudio.</p>
+        <a class="btn btn-primary" href="{% url 'reader:document-create' %}">Adicionar documento</a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

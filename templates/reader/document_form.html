@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Novo documento · ProjectLecture{% endblock %}
+{% block content %}
+<div class="page-header compact">
+    <div><p class="eyebrow">Nova leitura</p><h1>Adicionar documento</h1><p>O texto será extraído e transformado em áudio em segundo plano.</p></div>
+</div>
+<form method="post" enctype="multipart/form-data" class="row g-4">
+    {% csrf_token %}
+    <div class="col-xl-8">
+        <div class="section-card form-card">
+            {% if form.non_field_errors %}
+            <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+            {% endif %}
+            <div class="mb-4">
+                <label class="form-label" for="{{ form.title.id_for_label }}">{{ form.title.label }}</label>
+                {{ form.title }}
+                {% for error in form.title.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+            </div>
+            <div class="source-tabs mb-3">
+                <button class="source-tab active" type="button" data-source="text"><i class="fa-solid fa-align-left"></i>Colar texto</button>
+                <button class="source-tab" type="button" data-source="file"><i class="fa-solid fa-arrow-up-from-bracket"></i>Enviar arquivo</button>
+            </div>
+            <div id="textSource">
+                {{ form.text }}
+                {% for error in form.text.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+                <div class="form-hint"><span id="characterCount">0 caracteres</span><span>Limite: 100.000</span></div>
+            </div>
+            <div id="fileSource" class="d-none">
+                <label class="upload-zone" for="{{ form.original_file.id_for_label }}">
+                    <span class="upload-icon"><i class="fa-solid fa-cloud-arrow-up"></i></span>
+                    <strong>Selecione um arquivo</strong>
+                    <span>PDF, DOCX, EPUB ou TXT · até 20 MB</span>
+                    {{ form.original_file }}
+                </label>
+                <p id="selectedFile" class="selected-file mb-0"></p>
+                {% for error in form.original_file.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+            </div>
+        </div>
+    </div>
+    <div class="col-xl-4">
+        <div class="section-card form-card sticky-xl-top settings-card">
+            <h2>Escolha seu narrador</h2>
+            <p class="text-muted">Vozes neurais brasileiras processadas localmente.</p>
+            <div class="voice-picker mb-4" role="radiogroup" aria-label="Voz">
+                {% for voice in form.fields.voice.queryset %}
+                <label class="voice-option{% if form.voice.value|stringformat:'s' == voice.pk|stringformat:'s' %} selected{% endif %}">
+                    <input type="radio" name="voice" value="{{ voice.pk }}"
+                           {% if form.voice.value|stringformat:'s' == voice.pk|stringformat:'s' %}checked{% endif %}
+                           {% if not form.is_bound and voice.is_default %}checked{% endif %}>
+                    <span class="voice-avatar">
+                        {% if voice.avatar %}
+                        <img src="{% static voice.avatar %}" alt="">
+                        {% else %}
+                        <i class="fa-solid fa-wave-square"></i>
+                        {% endif %}
+                    </span>
+                    <span class="voice-copy">
+                        <span class="voice-name-row"><strong>{{ voice.name }}</strong><em>{{ voice.quality_label }}</em></span>
+                        <small>{{ voice.style_label }}</small>
+                        <button class="voice-preview" type="button"
+                                data-preview-url="{% url 'reader:voice-preview' voice.pk %}"
+                                aria-label="Ouvir amostra da voz {{ voice.name }}">
+                            <i class="fa-solid fa-circle-play"></i> Ouvir amostra
+                        </button>
+                    </span>
+                    <span class="voice-check"><i class="fa-solid fa-check"></i></span>
+                </label>
+                {% endfor %}
+                {% for error in form.voice.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+            </div>
+            <div class="mb-4">
+                <label class="form-label" for="{{ form.reading_mode.id_for_label }}">{{ form.reading_mode.label }}</label>
+                {{ form.reading_mode }}
+                <div class="form-text">O modo acadêmico melhora abreviações, referências e símbolos.</div>
+                {% for error in form.reading_mode.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+            </div>
+            <div class="mb-4">
+                <div class="d-flex justify-content-between"><label class="form-label" for="{{ form.speed.id_for_label }}">Velocidade</label><strong><span id="speedValue">{{ form.speed.value|default:170 }}</span> ppm</strong></div>
+                {{ form.speed }}
+                <div class="range-labels"><span>Mais calma</span><span>Mais rápida</span></div>
+                {% for error in form.speed.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+            </div>
+            <div class="privacy-note"><i class="fa-solid fa-lock"></i><div><strong>IA local e aberta</strong><span>Texto e áudio permanecem no seu ambiente Docker.</span></div></div>
+            <button class="btn btn-primary btn-lg w-100 mt-4" type="submit"><i class="fa-solid fa-wand-magic-sparkles me-2"></i>Gerar áudio</button>
+        </div>
+    </div>
+</form>
+{% endblock %}

@@ -1,0 +1,41 @@
+name: Testes
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  django:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DB_ENGINE: sqlite
+      CELERY_TASK_ALWAYS_EAGER: "1"
+      DJANGO_SECRET_KEY: chave-exclusiva-do-ambiente-de-ci
+
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar bibliotecas do sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes default-libmysqlclient-dev espeak-ng pkg-config
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Validar migrations
+        run: python manage.py makemigrations --check --dry-run
+
+      - name: Executar testes
+        run: python manage.py test

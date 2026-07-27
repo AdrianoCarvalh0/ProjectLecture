@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Criar conta · ProjectLecture{% endblock %}
+{% block body_class %}auth-page{% endblock %}
+{% block anonymous_content %}
+<div class="auth-shell">
+    <section class="auth-story">
+        <div class="auth-story-content">
+            <a class="auth-brand" href="{% url 'login' %}">
+                <span class="brand-mark"><i class="fa-solid fa-wave-square"></i></span>
+                Project<span>Lecture</span>
+            </a>
+            <p class="eyebrow mt-5">Comece em poucos segundos</p>
+            <h1>Sua biblioteca também pode falar.</h1>
+            <p class="lead">Crie sua conta para importar o primeiro texto e validar o fluxo completo.</p>
+        </div>
+    </section>
+    <section class="auth-form-panel">
+        <div class="auth-form">
+            <p class="eyebrow">Nova conta</p>
+            <h2>Crie seu acesso</h2>
+            <p class="text-muted mb-4">Use um usuário e uma senha segura.</p>
+            <form method="post" class="auth-django-form">
+                {% csrf_token %}
+                {% for field in form %}
+                <div class="mb-3">
+                    <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+                    {{ field }}
+                    {% if field.help_text %}<div class="form-text">{{ field.help_text|safe }}</div>{% endif %}
+                    {% for error in field.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+                </div>
+                {% endfor %}
+                {% for error in form.non_field_errors %}<div class="alert alert-danger">{{ error }}</div>{% endfor %}
+                <button class="btn btn-primary btn-lg w-100" type="submit">Criar conta <i class="fa-solid fa-arrow-right ms-2"></i></button>
+            </form>
+            <p class="text-center text-muted mt-4 mb-0">Já possui conta? <a href="{% url 'login' %}">Entrar</a></p>
+        </div>
+    </section>
+</div>
+{% endblock %}

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Entrar · ProjectLecture{% endblock %}
+{% block body_class %}auth-page{% endblock %}
+{% block anonymous_content %}
+<div class="auth-shell">
+    <section class="auth-story">
+        <div class="auth-story-content">
+            <a class="auth-brand" href="{% url 'login' %}">
+                <span class="brand-mark"><i class="fa-solid fa-wave-square"></i></span>
+                Project<span>Lecture</span>
+            </a>
+            <p class="eyebrow mt-5">Seu conteúdo, no seu ritmo</p>
+            <h1>Transforme documentos em tempo bem aproveitado.</h1>
+            <p class="lead">Ouça artigos, leis e relatórios enquanto acompanha o texto e retome exatamente de onde parou.</p>
+            <div class="auth-feature"><i class="fa-solid fa-shield-halved"></i><span>Processamento local nesta primeira versão</span></div>
+        </div>
+    </section>
+    <section class="auth-form-panel">
+        <div class="auth-form">
+            <p class="eyebrow">Bem-vindo de volta</p>
+            <h2>Entre na sua conta</h2>
+            <p class="text-muted mb-4">Acesse sua biblioteca de leitura.</p>
+            {% if form.errors %}
+            <div class="alert alert-danger">Usuário ou senha inválidos. Tente novamente.</div>
+            {% endif %}
+            <form method="post">
+                {% csrf_token %}
+                <div class="mb-3">
+                    <label class="form-label" for="{{ form.username.id_for_label }}">Usuário</label>
+                    <input class="form-control form-control-lg" type="text" name="username" autofocus autocapitalize="none" autocomplete="username" required id="{{ form.username.id_for_label }}" placeholder="seu usuário">
+                </div>
+                <div class="mb-4">
+                    <label class="form-label" for="{{ form.password.id_for_label }}">Senha</label>
+                    <input class="form-control form-control-lg" type="password" name="password" autocomplete="current-password" required id="{{ form.password.id_for_label }}" placeholder="••••••••">
+                </div>
+                <button class="btn btn-primary btn-lg w-100" type="submit">Entrar <i class="fa-solid fa-arrow-right ms-2"></i></button>
+                {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+            </form>
+            <p class="text-center text-muted mt-4 mb-0">Primeiro acesso? <a href="{% url 'register' %}">Crie uma conta</a></p>
+        </div>
+    </section>
+</div>
+{% endblock %}
