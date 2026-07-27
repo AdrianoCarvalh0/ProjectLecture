@@ -189,7 +189,9 @@ AZURE_LOCATION=eastus2 AZURE_VM_SIZE=Standard_B1s ./scripts/azure/provision.sh
 ```
 
 O verificador executa apenas a validação ARM nas famílias gratuitas x86 e não
-cria recursos.
+cria recursos. Em assinaturas estudantis ele também tenta ler a atribuição
+`Allowed resource deployment regions`, pois as regiões permitidas variam por
+assinatura.
 
 Depois do primeiro deploy, crie o administrador:
 

@@ -7,7 +7,7 @@ AZURE_RESOURCE_GROUP="${AZURE_RESOURCE_GROUP:-rg-projectlecture-prod}"
 AZURE_ADMIN_USER="${AZURE_ADMIN_USER:-azureuser}"
 AZURE_SSH_KEY_PATH="${AZURE_SSH_KEY_PATH:-$(cd && pwd)/.ssh/projectlecture_azure}"
 AZURE_VM_SIZES="${AZURE_VM_SIZES:-Standard_B1s Standard_B2ats_v2}"
-AZURE_LOCATIONS="${AZURE_LOCATIONS:-centralus southcentralus westus2 westus3 eastus northcentralus canadacentral}"
+AZURE_LOCATIONS="${AZURE_LOCATIONS:-}"
 
 if ! command -v az >/dev/null 2>&1; then
     echo "Azure CLI não encontrado." >&2
@@ -29,6 +29,48 @@ fi
 subscription_id="$(az account show --query id --output tsv)"
 subscription_slug="${subscription_id//-/}"
 azure_dns_label="${AZURE_DNS_LABEL:-projectlecture-${subscription_slug:0:10}}"
+
+if [[ -z "$AZURE_LOCATIONS" ]]; then
+    policy_assignments="$(mktemp)"
+    if az policy assignment list \
+        --scope "/subscriptions/$subscription_id" \
+        --disable-scope-strict-match true \
+        --output json >"$policy_assignments" 2>/dev/null; then
+        AZURE_LOCATIONS="$(
+            python - "$policy_assignments" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    assignments = json.load(source)
+
+locations = []
+for assignment in assignments:
+    display_name = str(assignment.get("displayName", "")).lower()
+    if "location" not in display_name and "region" not in display_name:
+        continue
+    for parameter_name, parameter in (assignment.get("parameters") or {}).items():
+        normalized_name = parameter_name.lower()
+        if "location" not in normalized_name and "region" not in normalized_name:
+            continue
+        value = parameter.get("value") if isinstance(parameter, dict) else None
+        if isinstance(value, list):
+            locations.extend(item for item in value if isinstance(item, str))
+
+print(" ".join(dict.fromkeys(locations)))
+PY
+        )"
+    fi
+    rm -f "$policy_assignments"
+fi
+
+if [[ -n "$AZURE_LOCATIONS" ]]; then
+    echo "Regiões permitidas pela política: $AZURE_LOCATIONS"
+else
+    AZURE_LOCATIONS="centralus southcentralus westus2 westus3 eastus northcentralus canadacentral westeurope northeurope swedencentral francecentral germanywestcentral switzerlandnorth uksouth"
+    echo "A política não expôs sua lista; testando regiões candidatas."
+fi
+
 admin_cidr="${AZURE_ADMIN_CIDR:-}"
 if [[ -z "$admin_cidr" ]]; then
     public_ip="$(curl --fail --silent --show-error https://api.ipify.org || true)"
@@ -62,7 +104,7 @@ for location in $AZURE_LOCATIONS; do
             exit 0
         fi
 
-        if ! grep -q "SkuNotAvailable" "$validation_log"; then
+        if ! grep -Eq "SkuNotAvailable|RequestDisallowedByAzure" "$validation_log"; then
             echo "A validação falhou por um motivo diferente de capacidade:" >&2
             grep -o '"code": "[^"]*"' "$validation_log" | sort -u >&2 || true
             exit 1
