@@ -1,9 +1,28 @@
 (() => {
+    const authorizationKey = "projectlecture-google-drive-authorized";
+
+    const wasPreviouslyAuthorized = () => {
+        try {
+            return window.sessionStorage.getItem(authorizationKey) === "1";
+        } catch {
+            return false;
+        }
+    };
+
+    const rememberAuthorization = () => {
+        try {
+            window.sessionStorage.setItem(authorizationKey, "1");
+        } catch {
+            // O seletor continua funcionando mesmo se o armazenamento for bloqueado.
+        }
+    };
+
     const state = {
         pickerReady: false,
         identityReady: false,
         tokenClient: null,
         accessToken: null,
+        previouslyAuthorized: wasPreviouslyAuthorized(),
     };
 
     const elements = () => ({
@@ -131,11 +150,13 @@
                 return;
             }
             state.accessToken = response.access_token;
+            state.previouslyAuthorized = true;
+            rememberAuthorization();
             setStatus("Autorização concluída. Abrindo o Google Drive…", "is-loading");
             showPicker();
         };
         state.tokenClient.requestAccessToken({
-            prompt: state.accessToken ? "" : "consent",
+            prompt: state.accessToken || state.previouslyAuthorized ? "" : "consent",
         });
     };
 

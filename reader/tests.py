@@ -158,6 +158,13 @@ class VoiceCatalogTests(TestCase):
 
 
 class WebViewsTests(BaseReaderTest):
+    def test_google_popup_can_report_back_to_the_main_window(self):
+        response = self.client.get(reverse("login"))
+        self.assertEqual(
+            response["Cross-Origin-Opener-Policy"],
+            "same-origin-allow-popups",
+        )
+
     def test_login_is_required(self):
         response = self.client.get(reverse("reader:dashboard"))
         self.assertRedirects(

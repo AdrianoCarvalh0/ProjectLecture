@@ -89,6 +89,9 @@ GOOGLE_CLOUD_PROJECT_NUMBER=123456789012
 O login solicita somente perfil e e-mail. O Drive usa uma autorização separada
 com o escopo `drive.file`: o usuário escolhe um arquivo no seletor oficial, o
 servidor baixa esse arquivo com um token temporário e não guarda o token.
+O cabeçalho `Cross-Origin-Opener-Policy` deve permanecer como
+`same-origin-allow-popups` para que a janela OAuth consiga devolver o token à
+página do ProjectLecture.
 
 ## Enviar uma leitura ao Kindle
 
