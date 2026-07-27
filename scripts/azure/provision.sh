@@ -50,6 +50,7 @@ az deployment group create \
     --resource-group "$AZURE_RESOURCE_GROUP" \
     --template-file "$PROJECT_ROOT/infra/azure/main.bicep" \
     --parameters \
+        location="$AZURE_LOCATION" \
         adminUsername="$AZURE_ADMIN_USER" \
         sshPublicKey="$ssh_public_key" \
         adminSourceCidr="$AZURE_ADMIN_CIDR" \

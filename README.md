@@ -176,6 +176,17 @@ export AZURE_DNS_LABEL=projectlecture-meu-identificador
 export AZURE_MONTHLY_BUDGET=8
 ```
 
+Se uma região estiver temporariamente sem capacidade para `Standard_B1s`, tente
+o tamanho gratuito AMD `Standard_B2ats_v2` ou selecione outra região. O script
+passa `AZURE_LOCATION` explicitamente ao Bicep, mesmo quando o grupo de recursos
+já existe em outra região:
+
+```bash
+AZURE_VM_SIZE=Standard_B2ats_v2 ./scripts/azure/provision.sh
+# Alternativa:
+AZURE_LOCATION=eastus2 AZURE_VM_SIZE=Standard_B1s ./scripts/azure/provision.sh
+```
+
 Depois do primeiro deploy, crie o administrador:
 
 ```bash
