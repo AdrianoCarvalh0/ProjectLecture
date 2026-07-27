@@ -21,6 +21,20 @@ CSRF_TRUSTED_ORIGINS = [
     if origin.strip()
 ]
 ALLOW_PUBLIC_REGISTRATION = env_bool("ALLOW_PUBLIC_REGISTRATION", True)
+GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "").strip()
+GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
+GOOGLE_DRIVE_API_KEY = os.getenv("GOOGLE_DRIVE_API_KEY", "").strip()
+GOOGLE_CLOUD_PROJECT_NUMBER = os.getenv(
+    "GOOGLE_CLOUD_PROJECT_NUMBER", ""
+).strip()
+GOOGLE_LOGIN_ENABLED = bool(
+    GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET
+)
+GOOGLE_DRIVE_ENABLED = bool(
+    GOOGLE_OAUTH_CLIENT_ID
+    and GOOGLE_DRIVE_API_KEY
+    and GOOGLE_CLOUD_PROJECT_NUMBER
+)
 
 USE_X_FORWARDED_HOST = env_bool("DJANGO_USE_X_FORWARDED_HOST", False)
 if env_bool("DJANGO_SECURE_PROXY_SSL_HEADER", False):
@@ -46,6 +60,10 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "allauth",
+    "allauth.account",
+    "allauth.socialaccount",
+    "allauth.socialaccount.providers.google",
     "rest_framework",
     "reader",
 ]
@@ -57,6 +75,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "allauth.account.middleware.AccountMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -128,6 +147,28 @@ LOGIN_REDIRECT_URL = "reader:dashboard"
 LOGOUT_REDIRECT_URL = "login"
 LOGIN_URL = "login"
 
+AUTHENTICATION_BACKENDS = [
+    "django.contrib.auth.backends.ModelBackend",
+    "allauth.account.auth_backends.AuthenticationBackend",
+]
+ACCOUNT_EMAIL_VERIFICATION = "none"
+ACCOUNT_ADAPTER = "reader.adapters.AccountAdapter"
+SOCIALACCOUNT_ADAPTER = "reader.adapters.SocialAccountAdapter"
+SOCIALACCOUNT_AUTO_SIGNUP = True
+SOCIALACCOUNT_EMAIL_AUTHENTICATION_AUTO_CONNECT = True
+SOCIALACCOUNT_PROVIDERS = {
+    "google": {
+        "EMAIL_AUTHENTICATION": True,
+        "APP": {
+            "client_id": GOOGLE_OAUTH_CLIENT_ID,
+            "secret": GOOGLE_OAUTH_CLIENT_SECRET,
+            "key": "",
+        },
+        "SCOPE": ["profile", "email"],
+        "AUTH_PARAMS": {"access_type": "online"},
+    }
+}
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework.authentication.SessionAuthentication",
@@ -151,6 +192,10 @@ CELERY_TASK_ALWAYS_EAGER = env_bool("CELERY_TASK_ALWAYS_EAGER", False)
 
 MAX_DOCUMENT_SIZE_MB = int(os.getenv("MAX_DOCUMENT_SIZE_MB", "20"))
 MAX_CHARACTERS_PER_DOCUMENT = int(os.getenv("MAX_CHARACTERS_PER_DOCUMENT", "100000"))
+MAX_DOCUMENTS_PER_USER = int(os.getenv("MAX_DOCUMENTS_PER_USER", "50"))
+MAX_DOCUMENTS_PER_USER_PER_DAY = int(
+    os.getenv("MAX_DOCUMENTS_PER_USER_PER_DAY", "10")
+)
 NEURAL_TTS_URL = os.getenv("NEURAL_TTS_URL", "http://neural-tts:8100")
 NEURAL_TTS_TIMEOUT_SECONDS = int(os.getenv("NEURAL_TTS_TIMEOUT_SECONDS", "600"))
 AZURE_SPEECH_KEY = os.getenv("AZURE_SPEECH_KEY", "").strip()

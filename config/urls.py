@@ -11,6 +11,7 @@ urlpatterns = [
     path("conta/entrar/", auth_views.LoginView.as_view(), name="login"),
     path("conta/sair/", auth_views.LogoutView.as_view(), name="logout"),
     path("conta/cadastrar/", RegisterView.as_view(), name="register"),
+    path("contas/", include("allauth.urls")),
     path("api/", include("reader.api_urls")),
     path("", include("reader.urls")),
 ]

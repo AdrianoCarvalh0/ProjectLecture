@@ -4,7 +4,6 @@ from pathlib import PurePosixPath
 from django.contrib import messages
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.conf import settings
 from django.core.files.storage import default_storage
@@ -14,11 +13,20 @@ from django.http import FileResponse, Http404, JsonResponse
 from django.shortcuts import redirect
 from django.urls import reverse_lazy
 from django.utils.text import slugify
+from django.views.decorators.http import require_POST
 from django.views.generic import CreateView, DeleteView, DetailView, FormView, ListView, TemplateView
 
-from .forms import DocumentForm, RegenerateAudioForm
+from .forms import (
+    DocumentForm,
+    DriveImportForm,
+    RegenerateAudioForm,
+    RegistrationForm,
+)
 from .models import AudioSegment, Document, Voice
+from .services.community import document_creation_limit_error
 from .services.extractors import ExtractionError, extract_text, source_type_for
+from .services.google_drive import GoogleDriveImportError, download_selected_file
+from .services.kindle import document_as_epub
 from .services.streaming import tokenize_display_text
 from .services.text_preparation import prepare_for_speech
 from .services.tts import synthesize_segment
@@ -61,7 +69,7 @@ def private_media(request, path):
 
 
 class RegisterView(CreateView):
-    form_class = UserCreationForm
+    form_class = RegistrationForm
     template_name = "registration/register.html"
     success_url = reverse_lazy("reader:dashboard")
 
@@ -72,7 +80,11 @@ class RegisterView(CreateView):
 
     def form_valid(self, form):
         response = super().form_valid(form)
-        login(self.request, self.object)
+        login(
+            self.request,
+            self.object,
+            backend="django.contrib.auth.backends.ModelBackend",
+        )
         return response
 
 
@@ -128,7 +140,23 @@ class DocumentCreateView(LoginRequiredMixin, FormView):
     form_class = DocumentForm
     template_name = "reader/document_form.html"
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["google_drive_enabled"] = settings.GOOGLE_DRIVE_ENABLED
+        if settings.GOOGLE_DRIVE_ENABLED:
+            context["google_drive_client_id"] = settings.GOOGLE_OAUTH_CLIENT_ID
+            context["google_drive_api_key"] = settings.GOOGLE_DRIVE_API_KEY
+            context["google_cloud_project_number"] = (
+                settings.GOOGLE_CLOUD_PROJECT_NUMBER
+            )
+        return context
+
     def form_valid(self, form):
+        limit_error = document_creation_limit_error(self.request.user)
+        if limit_error:
+            form.add_error(None, limit_error)
+            return self.form_invalid(form)
+
         uploaded = form.cleaned_data["original_file"]
         text = form.cleaned_data["text"].strip()
         try:
@@ -165,6 +193,70 @@ class DocumentCreateView(LoginRequiredMixin, FormView):
             "Documento adicionado. A geração do áudio começou em segundo plano.",
         )
         return redirect(document)
+
+
+@login_required
+@require_POST
+def import_from_google_drive(request):
+    if not settings.GOOGLE_DRIVE_ENABLED:
+        raise Http404
+
+    limit_error = document_creation_limit_error(request.user)
+    if limit_error:
+        return JsonResponse({"error": limit_error}, status=429)
+
+    form = DriveImportForm(request.POST)
+    if not form.is_valid():
+        return JsonResponse(
+            {
+                "error": "Revise as opções da leitura.",
+                "fields": form.errors.get_json_data(),
+            },
+            status=400,
+        )
+
+    try:
+        uploaded = download_selected_file(
+            form.cleaned_data["file_id"],
+            form.cleaned_data["access_token"],
+        )
+        text = extract_text(uploaded)
+        uploaded.seek(0)
+    except (GoogleDriveImportError, ExtractionError) as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+    if not text:
+        return JsonResponse(
+            {"error": "Nenhum texto legível foi encontrado no arquivo."},
+            status=400,
+        )
+    if len(text) > settings.MAX_CHARACTERS_PER_DOCUMENT:
+        return JsonResponse(
+            {
+                "error": (
+                    "O conteúdo extraído excede "
+                    f"{settings.MAX_CHARACTERS_PER_DOCUMENT:,} caracteres."
+                )
+            },
+            status=400,
+        )
+
+    document = Document.objects.create(
+        owner=request.user,
+        title=form.cleaned_data["title"],
+        source_type=source_type_for(uploaded.name),
+        original_file=uploaded,
+        extracted_text=text,
+        voice=form.cleaned_data["voice"],
+        speed=form.cleaned_data["speed"],
+        reading_mode=form.cleaned_data["reading_mode"],
+    )
+    dispatch_audio_generation(document)
+    messages.success(
+        request,
+        "Arquivo importado do Google Drive. A geração do áudio começou.",
+    )
+    return JsonResponse({"redirect_url": document.get_absolute_url()}, status=201)
 
 
 class OwnedDocumentMixin(LoginRequiredMixin):
@@ -213,6 +305,28 @@ class DocumentDeleteView(OwnedDocumentMixin, DeleteView):
             segment.audio_file.delete(save=False)
         messages.success(self.request, "Documento removido da biblioteca.")
         return super().form_valid(form)
+
+
+@login_required
+def export_document_to_kindle(request, pk):
+    document = Document.objects.filter(owner=request.user, pk=pk).first()
+    if not document:
+        raise Http404
+    try:
+        output = document_as_epub(document)
+    except Exception:
+        messages.error(
+            request,
+            "Não foi possível preparar este documento para o Kindle.",
+        )
+        return redirect(document)
+    filename = f"{slugify(document.title) or f'documento-{document.pk}'}.epub"
+    return FileResponse(
+        output,
+        as_attachment=True,
+        filename=filename,
+        content_type="application/epub+zip",
+    )
 
 
 def regenerate_document(request, pk):

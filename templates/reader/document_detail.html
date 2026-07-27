@@ -18,12 +18,16 @@
             <i class="fa-solid fa-microphone-lines me-2"></i>Trocar voz
         </button>
         {% if document.original_file %}<a class="btn btn-outline-secondary" href="{{ document.original_file.url }}" download><i class="fa-solid fa-file-arrow-down me-2"></i>Original</a>{% endif %}
+        <a class="btn btn-outline-secondary" href="{% url 'reader:document-kindle' document.pk %}">
+            <i class="fa-solid fa-tablet-screen-button me-2"></i>Kindle
+        </a>
         <div class="dropdown">
             <button class="btn btn-outline-secondary" data-bs-toggle="dropdown"><i class="fa-solid fa-ellipsis"></i></button>
             <ul class="dropdown-menu dropdown-menu-end">
                 <li>
                     <form method="post" action="{% url 'reader:document-regenerate' document.pk %}">{% csrf_token %}<button class="dropdown-item" type="submit" {% if document.status == 'processing' or document.stream_is_building %}disabled{% endif %}><i class="fa-solid fa-rotate me-2"></i>Gerar novamente</button></form>
                 </li>
+                <li><a class="dropdown-item" href="https://www.amazon.com/sendtokindle" target="_blank" rel="noopener"><i class="fa-solid fa-paper-plane me-2"></i>Abrir Enviar para Kindle</a></li>
                 <li><a class="dropdown-item text-danger" href="{% url 'reader:document-delete' document.pk %}"><i class="fa-solid fa-trash me-2"></i>Excluir</a></li>
             </ul>
         </div>

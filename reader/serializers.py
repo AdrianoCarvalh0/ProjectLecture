@@ -2,6 +2,7 @@ from django.conf import settings
 from rest_framework import serializers
 
 from .models import AudioSegment, Document, ReadingProgress, Voice
+from .services.community import document_creation_limit_error
 from .services.extractors import ExtractionError, extract_text, source_type_for
 from .tasks import dispatch_audio_generation
 
@@ -173,6 +174,11 @@ class DocumentCreateSerializer(serializers.Serializer):
     )
 
     def validate(self, attrs):
+        request = self.context.get("request")
+        if request:
+            limit_error = document_creation_limit_error(request.user)
+            if limit_error:
+                raise serializers.ValidationError(limit_error)
         text = (attrs.get("text") or "").strip()
         uploaded = attrs.get("original_file")
         if bool(text) == bool(uploaded):

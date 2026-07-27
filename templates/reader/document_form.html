@@ -5,7 +5,7 @@
 <div class="page-header compact">
     <div><p class="eyebrow">Nova leitura</p><h1>Adicionar documento</h1><p>O texto será extraído e transformado em áudio em segundo plano.</p></div>
 </div>
-<form method="post" enctype="multipart/form-data" class="row g-4">
+<form method="post" enctype="multipart/form-data" class="row g-4" id="documentCreateForm" data-active-source="text">
     {% csrf_token %}
     <div class="col-xl-8">
         <div class="section-card form-card">
@@ -20,6 +20,9 @@
             <div class="source-tabs mb-3">
                 <button class="source-tab active" type="button" data-source="text"><i class="fa-solid fa-align-left"></i>Colar texto</button>
                 <button class="source-tab" type="button" data-source="file"><i class="fa-solid fa-arrow-up-from-bracket"></i>Enviar arquivo</button>
+                {% if google_drive_enabled %}
+                <button class="source-tab" type="button" data-source="drive"><i class="fa-brands fa-google-drive"></i>Google Drive</button>
+                {% endif %}
             </div>
             <div id="textSource">
                 {{ form.text }}
@@ -36,6 +39,28 @@
                 <p id="selectedFile" class="selected-file mb-0"></p>
                 {% for error in form.original_file.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
             </div>
+            {% if google_drive_enabled %}
+            <div id="driveSource" class="d-none">
+                <div class="drive-zone">
+                    <span class="upload-icon drive-icon"><i class="fa-brands fa-google-drive"></i></span>
+                    <strong>Escolha um arquivo do seu Google Drive</strong>
+                    <span>Você libera somente o arquivo escolhido. O acesso não é armazenado.</span>
+                    <button
+                        class="btn btn-outline-primary mt-3"
+                        id="googleDriveButton"
+                        type="button"
+                        data-client-id="{{ google_drive_client_id }}"
+                        data-api-key="{{ google_drive_api_key }}"
+                        data-app-id="{{ google_cloud_project_number }}"
+                        data-import-url="{% url 'reader:drive-import' %}"
+                        disabled
+                    >
+                        <i class="fa-brands fa-google-drive me-2"></i>Escolher no Drive
+                    </button>
+                    <div class="drive-status" id="driveStatus" aria-live="polite">Carregando o seletor seguro do Google…</div>
+                </div>
+            </div>
+            {% endif %}
         </div>
     </div>
     <div class="col-xl-4">
@@ -86,4 +111,11 @@
         </div>
     </div>
 </form>
+{% endblock %}
+{% block extra_js %}
+{% if google_drive_enabled %}
+<script src="{% static 'js/google-drive.js' %}"></script>
+<script async defer src="https://apis.google.com/js/api.js" onload="window.ProjectLectureDrive.gapiLoaded()"></script>
+<script async defer src="https://accounts.google.com/gsi/client" onload="window.ProjectLectureDrive.gisLoaded()"></script>
+{% endif %}
 {% endblock %}

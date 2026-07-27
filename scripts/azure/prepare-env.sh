@@ -25,6 +25,25 @@ if [[ -z "$azure_key" ]]; then
     read -r -s -p "Cole a chave do Azure Speech: " azure_key
     echo
 fi
+
+google_client_id="${GOOGLE_OAUTH_CLIENT_ID:-}"
+google_client_secret="${GOOGLE_OAUTH_CLIENT_SECRET:-}"
+google_drive_api_key="${GOOGLE_DRIVE_API_KEY:-}"
+google_project_number="${GOOGLE_CLOUD_PROJECT_NUMBER:-}"
+if [[ -f "$PROJECT_ROOT/.env" ]]; then
+    [[ -n "$google_client_id" ]] || google_client_id="$(
+        sed -n 's/^GOOGLE_OAUTH_CLIENT_ID=//p' "$PROJECT_ROOT/.env" | head -n 1
+    )"
+    [[ -n "$google_client_secret" ]] || google_client_secret="$(
+        sed -n 's/^GOOGLE_OAUTH_CLIENT_SECRET=//p' "$PROJECT_ROOT/.env" | head -n 1
+    )"
+    [[ -n "$google_drive_api_key" ]] || google_drive_api_key="$(
+        sed -n 's/^GOOGLE_DRIVE_API_KEY=//p' "$PROJECT_ROOT/.env" | head -n 1
+    )"
+    [[ -n "$google_project_number" ]] || google_project_number="$(
+        sed -n 's/^GOOGLE_CLOUD_PROJECT_NUMBER=//p' "$PROJECT_ROOT/.env" | head -n 1
+    )"
+fi
 if [[ -z "$azure_key" ]]; then
     echo "A chave do Azure Speech é obrigatória." >&2
     exit 1
@@ -58,7 +77,12 @@ umask 077
     echo "DJANGO_SECURE_HSTS_SECONDS=31536000"
     echo "DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS=1"
     echo "DJANGO_SECURE_HSTS_PRELOAD=0"
-    echo "ALLOW_PUBLIC_REGISTRATION=0"
+    echo "ALLOW_PUBLIC_REGISTRATION=1"
+    echo
+    echo "GOOGLE_OAUTH_CLIENT_ID=$google_client_id"
+    echo "GOOGLE_OAUTH_CLIENT_SECRET=$google_client_secret"
+    echo "GOOGLE_DRIVE_API_KEY=$google_drive_api_key"
+    echo "GOOGLE_CLOUD_PROJECT_NUMBER=$google_project_number"
     echo
     echo "DB_ENGINE=mysql"
     echo "MYSQL_HOST=db"
@@ -73,6 +97,8 @@ umask 077
     echo "CELERY_TASK_ALWAYS_EAGER=0"
     echo "MAX_DOCUMENT_SIZE_MB=20"
     echo "MAX_CHARACTERS_PER_DOCUMENT=100000"
+    echo "MAX_DOCUMENTS_PER_USER=50"
+    echo "MAX_DOCUMENTS_PER_USER_PER_DAY=10"
     echo "STREAM_CHUNK_CHARS=360"
     echo
     echo "AZURE_SPEECH_KEY=$azure_key"

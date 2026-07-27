@@ -11,6 +11,11 @@ urlpatterns = [
     path("biblioteca/", views.DocumentListView.as_view(), name="document-list"),
     path("documentos/novo/", views.DocumentCreateView.as_view(), name="document-create"),
     path(
+        "documentos/importar/drive/",
+        views.import_from_google_drive,
+        name="drive-import",
+    ),
+    path(
         "documentos/<int:pk>/",
         views.DocumentDetailView.as_view(),
         name="document-detail",
@@ -24,6 +29,11 @@ urlpatterns = [
         "documentos/<int:pk>/gerar/",
         views.regenerate_document,
         name="document-regenerate",
+    ),
+    path(
+        "documentos/<int:pk>/kindle/",
+        views.export_document_to_kindle,
+        name="document-kindle",
     ),
     path("vozes/<int:pk>/amostra/", views.voice_preview, name="voice-preview"),
 ]

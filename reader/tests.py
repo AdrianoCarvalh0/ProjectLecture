@@ -165,10 +165,56 @@ class WebViewsTests(BaseReaderTest):
             f"{reverse('login')}?next={reverse('reader:dashboard')}",
         )
 
+    @override_settings(
+        GOOGLE_LOGIN_ENABLED=True,
+        SOCIALACCOUNT_PROVIDERS={
+            "google": {
+                "APP": {
+                    "client_id": "google-client-id",
+                    "secret": "google-client-secret",
+                    "key": "",
+                }
+            }
+        },
+    )
+    def test_login_page_offers_google_when_configured(self):
+        response = self.client.get(reverse("login"))
+        self.assertContains(response, "Continuar com Google")
+        self.assertContains(response, "/contas/google/login/")
+
     @override_settings(ALLOW_PUBLIC_REGISTRATION=False)
     def test_public_registration_can_be_disabled(self):
         response = self.client.get(reverse("register"))
         self.assertEqual(response.status_code, 404)
+
+    @override_settings(ALLOW_PUBLIC_REGISTRATION=False)
+    def test_allauth_signup_is_also_closed(self):
+        self.client.post(
+            "/contas/signup/",
+            {
+                "username": "cadastro-alternativo",
+                "email": "alternativo@example.com",
+                "password1": "senha-segura-789",
+                "password2": "senha-segura-789",
+            },
+        )
+        self.assertFalse(
+            User.objects.filter(username="cadastro-alternativo").exists()
+        )
+
+    def test_public_registration_requires_and_saves_unique_email(self):
+        response = self.client.post(
+            reverse("register"),
+            {
+                "username": "nova-leitora",
+                "email": "leitora@example.com",
+                "password1": "senha-segura-456",
+                "password2": "senha-segura-456",
+            },
+        )
+        self.assertRedirects(response, reverse("reader:dashboard"))
+        user = User.objects.get(username="nova-leitora")
+        self.assertEqual(user.email, "leitora@example.com")
 
     def test_library_only_shows_own_documents(self):
         other = User.objects.create_user("outro", password="senha-forte-123")
@@ -190,7 +236,6 @@ class WebViewsTests(BaseReaderTest):
         self.client.force_login(self.user)
         response = self.client.get(document.original_file.url)
         self.assertEqual(response.status_code, 200)
-        response.close()
 
         self.client.force_login(other)
         response = self.client.get(document.original_file.url)
@@ -263,6 +308,68 @@ class WebViewsTests(BaseReaderTest):
         self.assertEqual(document.owner, self.user)
         self.assertEqual(document.source_type, Document.SourceType.TEXT)
         dispatch.assert_called_once_with(document)
+
+    @override_settings(MAX_DOCUMENTS_PER_USER=1)
+    @patch("reader.views.dispatch_audio_generation")
+    def test_community_library_limit_blocks_new_document(self, dispatch):
+        self.make_document()
+        self.client.force_login(self.user)
+        response = self.client.post(
+            reverse("reader:document-create"),
+            {
+                "title": "Documento além do limite",
+                "text": "Não deve ser criado.",
+                "voice": self.voice.pk,
+                "speed": 180,
+                "reading_mode": Document.ReadingMode.ACADEMIC,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "limite comunitário")
+        self.assertFalse(
+            Document.objects.filter(title="Documento além do limite").exists()
+        )
+        dispatch.assert_not_called()
+
+    @override_settings(GOOGLE_DRIVE_ENABLED=True)
+    @patch("reader.views.dispatch_audio_generation")
+    @patch("reader.views.download_selected_file")
+    def test_imports_selected_google_drive_file(self, download, dispatch):
+        download.return_value = SimpleUploadedFile(
+            "artigo.txt",
+            "Texto importado do Drive.".encode(),
+            content_type="text/plain",
+        )
+        self.client.force_login(self.user)
+        response = self.client.post(
+            reverse("reader:drive-import"),
+            {
+                "title": "Artigo no Drive",
+                "voice": self.voice.pk,
+                "speed": 170,
+                "reading_mode": Document.ReadingMode.ACADEMIC,
+                "file_id": "arquivo_drive_12345",
+                "access_token": "token-temporario",
+            },
+        )
+        self.assertEqual(response.status_code, 201)
+        document = Document.objects.get(title="Artigo no Drive")
+        self.assertEqual(document.owner, self.user)
+        self.assertEqual(document.source_type, Document.SourceType.TXT)
+        self.assertEqual(document.extracted_text, "Texto importado do Drive.")
+        dispatch.assert_called_once_with(document)
+
+    def test_exports_owned_document_as_kindle_epub(self):
+        document = self.make_document(title="Artigo para Kindle")
+        self.client.force_login(self.user)
+        response = self.client.get(
+            reverse("reader:document-kindle", kwargs={"pk": document.pk})
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/epub+zip")
+        self.assertIn("artigo-para-kindle.epub", response["Content-Disposition"])
+        content = b"".join(response.streaming_content)
+        self.assertTrue(content.startswith(b"PK"))
 
 
 class ApiTests(APITestCase):

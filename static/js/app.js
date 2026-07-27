@@ -36,18 +36,19 @@ document.addEventListener("DOMContentLoaded", () => {
     const sourceTabs = document.querySelectorAll(".source-tab");
     const textSource = document.getElementById("textSource");
     const fileSource = document.getElementById("fileSource");
+    const driveSource = document.getElementById("driveSource");
+    const documentCreateForm = document.getElementById("documentCreateForm");
     sourceTabs.forEach((tab) => tab.addEventListener("click", () => {
         sourceTabs.forEach((item) => item.classList.toggle("active", item === tab));
-        const showText = tab.dataset.source === "text";
-        textSource?.classList.toggle("d-none", !showText);
-        fileSource?.classList.toggle("d-none", showText);
-        if (showText) {
-            const fileInput = fileSource?.querySelector("input[type=file]");
-            if (fileInput) fileInput.value = "";
-        } else {
-            const textarea = textSource?.querySelector("textarea");
-            if (textarea) textarea.value = "";
-        }
+        const source = tab.dataset.source;
+        if (documentCreateForm) documentCreateForm.dataset.activeSource = source;
+        textSource?.classList.toggle("d-none", source !== "text");
+        fileSource?.classList.toggle("d-none", source !== "file");
+        driveSource?.classList.toggle("d-none", source !== "drive");
+        const fileInput = fileSource?.querySelector("input[type=file]");
+        const textarea = textSource?.querySelector("textarea");
+        if (source !== "file" && fileInput) fileInput.value = "";
+        if (source !== "text" && textarea) textarea.value = "";
     }));
 
     const textArea = document.getElementById("id_text");

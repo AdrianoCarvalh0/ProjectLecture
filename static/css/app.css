@@ -375,6 +375,22 @@ body.sb-sidenav-toggled #layoutSidenav_content { margin-left: 0; }
 .upload-zone > span:last-of-type { color: var(--muted); font-size: .8rem; }
 .upload-icon { align-items: center; background: var(--primary-soft); border-radius: 50%; color: var(--primary); display: flex; font-size: 1.15rem; height: 50px; justify-content: center; width: 50px; }
 .selected-file { color: var(--green); font-size: .82rem; font-weight: 650; margin-top: .75rem; }
+.drive-zone {
+    align-items: center;
+    background: #fbfbfd;
+    border: 1.5px dashed #cdd1dc;
+    border-radius: .8rem;
+    display: flex;
+    flex-direction: column;
+    padding: 3rem 1rem;
+    text-align: center;
+}
+.drive-zone > strong { margin: .8rem 0 .3rem; }
+.drive-zone > span:not(.upload-icon) { color: var(--muted); font-size: .8rem; }
+.drive-icon { color: #4285f4; }
+.drive-status { color: var(--muted); font-size: .72rem; margin-top: .8rem; min-height: 1rem; }
+.drive-status.is-loading { color: var(--primary); }
+.drive-status.is-error { color: var(--danger); }
 .settings-card { top: 84px; }
 .voice-picker { display: grid; gap: .65rem; }
 .voice-picker-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -669,6 +685,10 @@ body.sb-sidenav-toggled #layoutSidenav_content { margin-left: 0; }
 .auth-django-form input { border: 1px solid #dfe2ea; border-radius: .65rem; min-height: 46px; padding: .65rem .8rem; width: 100%; }
 .auth-django-form ul { color: var(--muted); font-size: .7rem; margin: .4rem 0 0; padding-left: 1rem; }
 .auth-django-form .helptext { color: var(--muted); font-size: .72rem; }
+.auth-divider { align-items: center; color: #9399a8; display: flex; font-size: .72rem; gap: .8rem; margin: 1.25rem 0; }
+.auth-divider::before, .auth-divider::after { background: var(--line); content: ""; flex: 1; height: 1px; }
+.btn-google { background: #fff; border: 1px solid #d8dce5; color: #30384b; }
+.btn-google:hover, .btn-google:focus { background: #f8f9fb; border-color: #c5cad5; color: #202637; }
 
 @media (max-width: 1199.98px) {
     .document-grid.library-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }

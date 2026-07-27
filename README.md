@@ -4,8 +4,10 @@ Leitor comunitário de documentos com Django, API REST interna, MySQL, Celery/Re
 
 ## O que já funciona
 
-- cadastro, login e isolamento da biblioteca por usuário;
+- cadastro público por e-mail, login Google opcional e isolamento da biblioteca por usuário;
 - criação por texto colado ou upload de PDF, DOCX, EPUB e TXT;
+- importação pontual de PDF, DOCX, EPUB, TXT e Google Docs pelo Google Drive;
+- exportação EPUB compatível com o fluxo oficial Enviar para Kindle;
 - extração de texto com PyMuPDF, python-docx e EbookLib;
 - geração progressiva e assíncrona em pequenos blocos com Celery;
 - quatro vozes neurais brasileiras do Azure Speech quando uma conta F0 é configurada;
@@ -45,6 +47,56 @@ arquivo `.env` também não é versionado; apenas o `.env.example` deve ir para 
 Git. Antes de uma publicação externa, altere pelo menos
 `DJANGO_SECRET_KEY`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD`,
 `DJANGO_ALLOWED_HOSTS` e `DJANGO_CSRF_TRUSTED_ORIGINS`.
+
+Cada conta gratuita pode manter 50 documentos e criar até 10 por dia por
+padrão. Ajuste `MAX_DOCUMENTS_PER_USER` e
+`MAX_DOCUMENTS_PER_USER_PER_DAY` no `.env` se necessário.
+
+## Login Google e arquivos do Drive
+
+No [Google Cloud Console](https://console.cloud.google.com/), use um único
+projeto para:
+
+1. configurar a tela de consentimento OAuth;
+2. ativar **Google Drive API** e **Google Picker API**;
+3. criar um cliente OAuth do tipo **Aplicativo da Web**;
+4. criar uma chave de API para o Picker, restrita às origens do ProjectLecture
+   e somente às APIs usadas.
+
+Para desenvolvimento, cadastre a origem JavaScript
+`http://localhost:8000` e a URI de redirecionamento:
+
+```text
+http://localhost:8000/contas/google/login/callback/
+```
+
+Em produção, cadastre também a origem e o callback HTTPS reais, por exemplo:
+
+```text
+https://projectlecture-0ff1c83a33.northcentralus.cloudapp.azure.com
+https://projectlecture-0ff1c83a33.northcentralus.cloudapp.azure.com/contas/google/login/callback/
+```
+
+Preencha sem versionar os valores:
+
+```env
+GOOGLE_OAUTH_CLIENT_ID=cliente.apps.googleusercontent.com
+GOOGLE_OAUTH_CLIENT_SECRET=segredo-oauth
+GOOGLE_DRIVE_API_KEY=chave-restrita-do-picker
+GOOGLE_CLOUD_PROJECT_NUMBER=123456789012
+```
+
+O login solicita somente perfil e e-mail. O Drive usa uma autorização separada
+com o escopo `drive.file`: o usuário escolhe um arquivo no seletor oficial, o
+servidor baixa esse arquivo com um token temporário e não guarda o token.
+
+## Enviar uma leitura ao Kindle
+
+Na página do documento, o botão **Kindle** baixa uma versão EPUB. Depois, envie
+o arquivo pelo [Enviar para Kindle](https://www.amazon.com/sendtokindle). A
+Amazon não fornece uma API pública para o ProjectLecture ler ou alterar a
+posição de leitura do Kindle; portanto, nesta versão o progresso salvo no
+ProjectLecture e o progresso mantido pela Amazon permanecem separados.
 
 Sem credenciais do Azure, o catálogo usa as vozes locais Kokoro. No primeiro uso
 de uma delas, o serviço baixa seus arquivos para o volume persistente
@@ -127,7 +179,7 @@ O arquivo `docker-compose.prod.yml` foi dimensionado para uma VM pequena:
 - Azure Speech F0, sem o container Kokoro em produção;
 - Caddy como proxy reverso e HTTPS automático;
 - volumes persistentes para banco, mídia, fila e certificados;
-- cadastro público desativado;
+- cadastro público gratuito com limites por conta e por dia;
 - backup diário de banco e mídia, com retenção padrão de sete dias.
 
 A infraestrutura Bicep cria uma VM Ubuntu 24.04 `Standard_B1s`, disco Standard
@@ -164,6 +216,15 @@ O provisionamento:
 7. envia o projeto para `/opt/projectlecture` e sobe a composição;
 8. configura HTTPS no endereço
    `https://<nome>.brazilsouth.cloudapp.azure.com`.
+
+Se `.env.prod` já existia antes do cadastro público, altere-o manualmente:
+
+```bash
+sed -i 's/^ALLOW_PUBLIC_REGISTRATION=.*/ALLOW_PUBLIC_REGISTRATION=1/' .env.prod
+```
+
+Acrescente as quatro variáveis Google ao mesmo arquivo para ativar os botões de
+login e Drive e execute novamente `./scripts/azure/deploy-app.sh`.
 
 Variáveis opcionais:
 

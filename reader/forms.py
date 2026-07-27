@@ -2,8 +2,12 @@ from pathlib import Path
 
 from django import forms
 from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.contrib.auth.forms import UserCreationForm
 
 from .models import Document, Voice
+
+User = get_user_model()
 
 
 class BootstrapFormMixin:
@@ -11,6 +15,39 @@ class BootstrapFormMixin:
         for field in self.fields.values():
             css_class = "form-select" if isinstance(field.widget, forms.Select) else "form-control"
             field.widget.attrs["class"] = css_class
+
+
+class RegistrationForm(BootstrapFormMixin, UserCreationForm):
+    email = forms.EmailField(
+        label="E-mail",
+        required=True,
+        help_text="Usado para identificar e recuperar sua conta.",
+    )
+
+    class Meta(UserCreationForm.Meta):
+        model = User
+        fields = ("username", "email")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.order_fields(("username", "email", "password1", "password2"))
+        self.apply_bootstrap()
+        self.fields["username"].label = "Usuário"
+        self.fields["password1"].label = "Senha"
+        self.fields["password2"].label = "Confirme a senha"
+
+    def clean_email(self):
+        email = self.cleaned_data["email"].strip().lower()
+        if User.objects.filter(email__iexact=email).exists():
+            raise forms.ValidationError("Já existe uma conta com este e-mail.")
+        return email
+
+    def save(self, commit=True):
+        user = super().save(commit=False)
+        user.email = self.cleaned_data["email"]
+        if commit:
+            user.save()
+        return user
 
 
 class DocumentForm(BootstrapFormMixin, forms.Form):
@@ -83,6 +120,23 @@ class DocumentForm(BootstrapFormMixin, forms.Form):
                 f"O arquivo excede o limite de {settings.MAX_DOCUMENT_SIZE_MB} MB."
             )
         return uploaded
+
+
+class DriveImportForm(BootstrapFormMixin, forms.Form):
+    title = forms.CharField(max_length=180)
+    voice = forms.ModelChoiceField(
+        queryset=Voice.objects.filter(is_active=True)
+    )
+    reading_mode = forms.ChoiceField(choices=Document.ReadingMode.choices)
+    speed = forms.IntegerField(min_value=80, max_value=320)
+    file_id = forms.RegexField(
+        regex=r"^[A-Za-z0-9_-]{10,200}$",
+        max_length=200,
+    )
+    access_token = forms.CharField(max_length=4096)
+
+    def clean_title(self):
+        return self.cleaned_data["title"].strip()
 
 
 class RegenerateAudioForm(BootstrapFormMixin, forms.Form):

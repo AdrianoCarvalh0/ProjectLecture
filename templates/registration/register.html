@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load socialaccount %}
 {% block title %}Criar conta · ProjectLecture{% endblock %}
 {% block body_class %}auth-page{% endblock %}
 {% block anonymous_content %}
@@ -32,6 +33,16 @@
                 {% for error in form.non_field_errors %}<div class="alert alert-danger">{{ error }}</div>{% endfor %}
                 <button class="btn btn-primary btn-lg w-100" type="submit">Criar conta <i class="fa-solid fa-arrow-right ms-2"></i></button>
             </form>
+            {% if google_login_enabled %}
+            <div class="auth-divider"><span>ou</span></div>
+            {% provider_login_url "google" process="login" as google_login_url %}
+            <form method="post" action="{{ google_login_url }}">
+                {% csrf_token %}
+                <button class="btn btn-google btn-lg w-100" type="submit">
+                    <i class="fa-brands fa-google me-2"></i>Cadastrar com Google
+                </button>
+            </form>
+            {% endif %}
             <p class="text-center text-muted mt-4 mb-0">Já possui conta? <a href="{% url 'login' %}">Entrar</a></p>
         </div>
     </section>
