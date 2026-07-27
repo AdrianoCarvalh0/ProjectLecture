@@ -1,6 +1,6 @@
 # ProjectLecture
 
-Leitor comunitário de documentos com Django, API REST interna, MySQL, Celery/Redis e interface baseada no SB Admin. Transforma texto, PDF, DOCX, EPUB ou TXT em áudio neural local, reproduz no navegador e salva automaticamente o ponto de leitura.
+Leitor comunitário de documentos com Django, API REST interna, MySQL, Celery/Redis e interface baseada no SB Admin. Transforma texto, PDF, DOCX, EPUB ou TXT em áudio neural, reproduz no navegador e salva automaticamente o ponto de leitura.
 
 ## O que já funciona
 
@@ -8,8 +8,9 @@ Leitor comunitário de documentos com Django, API REST interna, MySQL, Celery/Re
 - criação por texto colado ou upload de PDF, DOCX, EPUB e TXT;
 - extração de texto com PyMuPDF, python-docx e EbookLib;
 - geração progressiva e assíncrona em pequenos blocos com Celery;
-- TTS neural local com Kokoro-82M, sem chave externa ou cobrança por caractere;
-- três narradores brasileiros com avatares fictícios: Lia, Caio e Ravi;
+- quatro vozes neurais brasileiras do Azure Speech quando uma conta F0 é configurada;
+- TTS neural local alternativo com Kokoro-82M, sem chave externa ou cobrança por caractere;
+- catálogo automático: Azure configurado usa Francisca, Antonio, Thalita e Donato;
 - amostras de voz sob demanda e fallback leve com `espeak-ng`;
 - modo acadêmico que prepara abreviações, referências e símbolos para a fala;
 - player com play/pause, avanço/retrocesso e velocidade;
@@ -45,7 +46,35 @@ Git. Antes de uma publicação externa, altere pelo menos
 `DJANGO_SECRET_KEY`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD`,
 `DJANGO_ALLOWED_HOSTS` e `DJANGO_CSRF_TRUSTED_ORIGINS`.
 
-No primeiro uso de uma voz neural, o Kokoro baixa seus arquivos para o volume persistente `model_cache`. Essa primeira amostra pode demorar; as próximas reutilizam o modelo e o cache.
+Sem credenciais do Azure, o catálogo usa as vozes locais Kokoro. No primeiro uso
+de uma delas, o serviço baixa seus arquivos para o volume persistente
+`model_cache`. Essa primeira amostra pode demorar; as próximas reutilizam o
+modelo e o cache.
+
+## Vozes Azure Speech no nível gratuito
+
+Crie um recurso oficial Azure Speech no nível **Free F0** e acrescente ao `.env`:
+
+```env
+AZURE_SPEECH_KEY=chave-do-recurso
+AZURE_SPEECH_REGION=brazilsouth
+AZURE_SPEECH_ENDPOINT=https://brazilsouth.api.cognitive.microsoft.com/
+AZURE_SPEECH_TIER=F0
+```
+
+Recrie os containers para instalar o SDK e atualizar o catálogo:
+
+```bash
+docker compose up -d --build
+```
+
+A chave é usada somente no servidor e nunca é enviada ao navegador. O `.env`
+real é ignorado pelo Git. Com Azure ativo, os quatro narradores disponíveis são
+Francisca, Antonio, Thalita e Donato; sem a chave, o sistema volta ao catálogo
+Kokoro local na próxima execução de `python manage.py seed_voices`.
+
+O Azure retorna limites de palavra junto com a síntese. O ProjectLecture liga a
+pausa de vírgulas e pontos à palavra anterior, mantendo o destaque sincronizado.
 
 O ambiente padrão instala o PyTorch para CPU, reduzindo bastante a imagem. Em um host com NVIDIA Container Toolkit configurado, o override instala a variante CUDA:
 
@@ -58,6 +87,119 @@ Para criar um administrador:
 ```bash
 docker compose exec web python manage.py createsuperuser
 ```
+
+## Acesso temporário pela internet com ngrok
+
+O overlay `docker-compose.ngrok.yml` publica o container web sem expor MySQL,
+Redis ou o serviço neural. Por segurança, o cadastro público é desativado no
+túnel; use uma conta já criada.
+
+1. Crie uma conta gratuita no ngrok e copie seu authtoken.
+2. Salve-o somente no `.env` local:
+
+```env
+NGROK_AUTHTOKEN=seu-token
+```
+
+3. Suba o túnel e consulte a URL:
+
+```bash
+./scripts/ngrok-start.sh
+```
+
+O painel local do agente fica restrito a `http://127.0.0.1:4040`. Para encerrar:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ngrok.yml stop ngrok
+docker compose up -d --force-recreate web
+```
+
+O ngrok é apenas uma entrada temporária de desenvolvimento. A URL gratuita pode
+mudar quando o container reiniciar.
+
+## Produção econômica no Azure for Students
+
+O arquivo `docker-compose.prod.yml` foi dimensionado para uma VM pequena:
+
+- Django/Gunicorn com um processo e duas threads;
+- worker Celery com concorrência 1;
+- MySQL e Redis limitados para pouca memória;
+- Azure Speech F0, sem o container Kokoro em produção;
+- Caddy como proxy reverso e HTTPS automático;
+- volumes persistentes para banco, mídia, fila e certificados;
+- cadastro público desativado;
+- backup diário de banco e mídia, com retenção padrão de sete dias.
+
+A infraestrutura Bicep cria uma VM Ubuntu 24.04 `Standard_B1s`, disco Standard
+LRS de 64 GB, IP público com DNS, regras 80/443 e SSH restrito ao IP do
+administrador. O `cloud-init` instala Docker, cria 2 GB de swap e registra os
+serviços de inicialização e backup.
+
+Pré-requisitos na máquina de administração ou no Azure Cloud Shell:
+
+- Azure CLI autenticado;
+- `ssh`, `scp`, `rsync`, `curl` e `openssl`;
+- assinatura chamada `Azure for Students`.
+
+Provisionamento:
+
+```bash
+az login
+export AZURE_BUDGET_EMAIL=seu-email@instituicao.br
+./scripts/azure/provision.sh
+./scripts/azure/create-budget.sh
+./scripts/azure/deploy-app.sh
+```
+
+O provisionamento:
+
+1. seleciona a assinatura `Azure for Students`;
+2. cria `rg-projectlecture-prod` em `brazilsouth`;
+3. descobre seu IP público e libera SSH somente para `/32`;
+4. cria uma chave SSH exclusiva em
+   `~/.ssh/projectlecture_azure`, se necessário;
+5. implanta `infra/azure/main.bicep`;
+6. gera `.env.prod` com segredos aleatórios e copia a chave Azure Speech sem
+   imprimi-la;
+7. envia o projeto para `/opt/projectlecture` e sobe a composição;
+8. configura HTTPS no endereço
+   `https://<nome>.brazilsouth.cloudapp.azure.com`.
+
+Variáveis opcionais:
+
+```bash
+export AZURE_RESOURCE_GROUP=rg-projectlecture-prod
+export AZURE_LOCATION=brazilsouth
+export AZURE_VM_SIZE=Standard_B1s
+export AZURE_ADMIN_CIDR=203.0.113.10/32
+export AZURE_DNS_LABEL=projectlecture-meu-identificador
+export AZURE_MONTHLY_BUDGET=8
+```
+
+Depois do primeiro deploy, crie o administrador:
+
+```bash
+ssh -i ~/.ssh/projectlecture_azure azureuser@SEU_FQDN
+cd /opt/projectlecture
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec web \
+  python manage.py createsuperuser
+```
+
+Operações úteis na VM:
+
+```bash
+cd /opt/projectlecture
+docker compose --env-file .env.prod -f docker-compose.prod.yml ps
+docker compose --env-file .env.prod -f docker-compose.prod.yml logs -f web worker
+./scripts/prod/backup.sh
+systemctl list-timers projectlecture-backup.timer
+```
+
+O nível gratuito de VMs oferecido a clientes novos vale por 12 meses. A
+renovação estudantil recompõe o crédito anual, mas não deve ser tratada como uma
+renovação automática da franquia promocional da VM. O IP público e qualquer uso
+fora das franquias também podem consumir crédito; mantenha o orçamento mensal e
+os alertas ativos.
 
 Para aplicar migrations manualmente ou conferir seu estado:
 
@@ -164,17 +306,18 @@ Navegador / API interna
           |
         Redis
           |
-        Celery ── preparação acadêmica ── serviço neural Kokoro ── WAVs curtos
-                                            |
-                                      modelos abertos locais
+        Celery ── preparação acadêmica ──┬── Azure Speech F0
+                                         └── Kokoro local
+                                                  |
+                                     WAVs curtos + tempos por palavra
 ```
 
 O TTS fica atrás de uma interface em `reader/services/tts.py`. O Kokoro roda num container FastAPI separado, portanto modelos mais pesados como Chatterbox podem ser adicionados como outro provedor sem alterar biblioteca, fila, player ou progresso.
 
 O navegador recebe os trechos conforme ficam prontos e pré-carrega o seguinte.
-Nas vozes Kokoro, os tempos por palavra vêm das durações fonéticas previstas pelo
-próprio modelo, incluindo as pausas de pontuação. Vozes sem essa informação usam
-uma estimativa ponderada como fallback.
+No Azure, os tempos por palavra vêm dos eventos de síntese do próprio serviço.
+Nas vozes Kokoro, vêm das durações fonéticas previstas pelo modelo. Vozes sem
+essa informação usam uma estimativa ponderada como fallback.
 
 ## Avaliar qualidade e desempenho
 
@@ -190,11 +333,14 @@ As amostras ficam em `media/benchmarks/`. Para avaliação de qualidade, compare
 
 - [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M): Apache 2.0, com vozes brasileiras `pf_dora`, `pm_alex` e `pm_santa`.
 - `espeak-ng`: fallback livre e leve para máquinas que não comportam o serviço neural.
-- os avatares Lia, Caio e Ravi foram gerados especialmente para este projeto e não representam pessoas reais.
+- os avatares locais Lia, Caio e Ravi foram gerados especialmente para este projeto e não representam pessoas reais;
+- Microsoft Azure Speech SDK: integração opcional com o recurso configurado pelo operador.
 
 ## Limites desta versão
 
 - A primeira síntese neural precisa baixar o modelo e é mais lenta.
+- O Azure Speech envia cada trecho preparado ao recurso Azure configurado e está
+  sujeito aos limites mensais e de requisições do nível F0.
 - A qualidade de PDF depende da camada de texto original; periódicos escaneados exigirão OCR.
 - O limite padrão é 20 MB e 100.000 caracteres por documento.
 - Bootstrap e Font Awesome são carregados por CDN no navegador.

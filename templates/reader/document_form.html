@@ -41,10 +41,10 @@
     <div class="col-xl-4">
         <div class="section-card form-card sticky-xl-top settings-card">
             <h2>Escolha seu narrador</h2>
-            <p class="text-muted">Vozes neurais brasileiras processadas localmente.</p>
+            <p class="text-muted">Quatro vozes neurais brasileiras para comparar e escolher.</p>
             <div class="voice-picker mb-4" role="radiogroup" aria-label="Voz">
                 {% for voice in form.fields.voice.queryset %}
-                <label class="voice-option{% if form.voice.value|stringformat:'s' == voice.pk|stringformat:'s' %} selected{% endif %}">
+                <label class="voice-option voice-provider-{{ voice.provider }}{% if form.voice.value|stringformat:'s' == voice.pk|stringformat:'s' %} selected{% endif %}">
                     <input type="radio" name="voice" value="{{ voice.pk }}"
                            {% if form.voice.value|stringformat:'s' == voice.pk|stringformat:'s' %}checked{% endif %}
                            {% if not form.is_bound and voice.is_default %}checked{% endif %}>
@@ -52,7 +52,7 @@
                         {% if voice.avatar %}
                         <img src="{% static voice.avatar %}" alt="">
                         {% else %}
-                        <i class="fa-solid fa-wave-square"></i>
+                        <strong aria-hidden="true">{{ voice.name|slice:":1" }}</strong>
                         {% endif %}
                     </span>
                     <span class="voice-copy">
@@ -81,7 +81,7 @@
                 <div class="range-labels"><span>Mais calma</span><span>Mais rápida</span></div>
                 {% for error in form.speed.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
             </div>
-            <div class="privacy-note"><i class="fa-solid fa-lock"></i><div><strong>IA local e aberta</strong><span>Texto e áudio permanecem no seu ambiente Docker.</span></div></div>
+            <div class="privacy-note"><i class="fa-solid fa-shield-halved"></i><div><strong>Credencial protegida</strong><span>A chave do provedor permanece somente no servidor e nunca chega ao navegador.</span></div></div>
             <button class="btn btn-primary btn-lg w-100 mt-4" type="submit"><i class="fa-solid fa-wand-magic-sparkles me-2"></i>Gerar áudio</button>
         </div>
     </div>

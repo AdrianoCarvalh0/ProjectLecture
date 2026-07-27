@@ -6,6 +6,7 @@ app_name = "reader"
 
 urlpatterns = [
     path("health/", views.healthcheck, name="healthcheck"),
+    path("media/<path:path>", views.private_media, name="private-media"),
     path("", views.DashboardView.as_view(), name="dashboard"),
     path("biblioteca/", views.DocumentListView.as_view(), name="document-list"),
     path("documentos/novo/", views.DocumentCreateView.as_view(), name="document-create"),

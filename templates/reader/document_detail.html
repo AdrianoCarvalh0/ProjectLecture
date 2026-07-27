@@ -64,7 +64,7 @@
                 {% if document.voice.avatar %}
                 <img src="{% static document.voice.avatar %}" alt="Avatar de {{ document.voice.name }}">
                 {% else %}
-                <i class="fa-solid fa-wave-square"></i>
+                <strong class="player-avatar-initial" aria-hidden="true">{{ document.voice.name|slice:":1" }}</strong>
                 {% endif %}
                 <div class="sound-bars"><span></span><span></span><span></span><span></span></div>
                 <span class="narrator-badge">{{ document.voice.quality_label }}</span>
@@ -117,14 +117,14 @@
                 <div class="modal-body">
                     <div class="voice-picker voice-picker-grid mb-4" role="radiogroup" aria-label="Voz para regenerar">
                         {% for voice in regenerate_form.fields.voice.queryset %}
-                        <label class="voice-option{% if regenerate_form.voice.value|stringformat:'s' == voice.pk|stringformat:'s' %} selected{% endif %}">
+                        <label class="voice-option voice-provider-{{ voice.provider }}{% if regenerate_form.voice.value|stringformat:'s' == voice.pk|stringformat:'s' %} selected{% endif %}">
                             <input type="radio" name="voice" value="{{ voice.pk }}"
                                    {% if regenerate_form.voice.value|stringformat:'s' == voice.pk|stringformat:'s' %}checked{% endif %}>
                             <span class="voice-avatar">
                                 {% if voice.avatar %}
                                 <img src="{% static voice.avatar %}" alt="">
                                 {% else %}
-                                <i class="fa-solid fa-wave-square"></i>
+                                <strong aria-hidden="true">{{ voice.name|slice:":1" }}</strong>
                                 {% endif %}
                             </span>
                             <span class="voice-copy">

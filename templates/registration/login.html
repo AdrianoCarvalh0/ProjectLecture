@@ -13,7 +13,7 @@
             <p class="eyebrow mt-5">Seu conteúdo, no seu ritmo</p>
             <h1>Transforme documentos em tempo bem aproveitado.</h1>
             <p class="lead">Ouça artigos, leis e relatórios enquanto acompanha o texto e retome exatamente de onde parou.</p>
-            <div class="auth-feature"><i class="fa-solid fa-shield-halved"></i><span>Processamento local nesta primeira versão</span></div>
+            <div class="auth-feature"><i class="fa-solid fa-shield-halved"></i><span>Credenciais de síntese protegidas no servidor</span></div>
         </div>
     </section>
     <section class="auth-form-panel">
@@ -37,7 +37,9 @@
                 <button class="btn btn-primary btn-lg w-100" type="submit">Entrar <i class="fa-solid fa-arrow-right ms-2"></i></button>
                 {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
             </form>
+            {% if allow_public_registration %}
             <p class="text-center text-muted mt-4 mb-0">Primeiro acesso? <a href="{% url 'register' %}">Crie uma conta</a></p>
+            {% endif %}
         </div>
     </section>
 </div>

@@ -217,6 +217,37 @@ body.sb-sidenav-toggled #layoutSidenav_content { margin-left: 0; }
     box-shadow: 0 3px 15px rgba(35,42,66,.025);
     padding: 1.5rem;
 }
+
+.voice-option .voice-avatar strong {
+    align-items: center;
+    background: linear-gradient(145deg, #6857e5, #8f82f2);
+    color: #fff;
+    display: flex;
+    font-size: 1.2rem;
+    font-weight: 800;
+    height: 100%;
+    justify-content: center;
+    width: 100%;
+}
+.voice-option:nth-of-type(2) .voice-avatar strong {
+    background: linear-gradient(145deg, #278ac7, #64b5df);
+}
+.voice-option:nth-of-type(3) .voice-avatar strong {
+    background: linear-gradient(145deg, #d4678b, #ed9ab5);
+}
+.voice-option:nth-of-type(4) .voice-avatar strong {
+    background: linear-gradient(145deg, #3b806e, #69b49f);
+}
+.player-avatar-initial {
+    align-items: center;
+    background: linear-gradient(145deg, #6857e5, #3c3198);
+    color: #fff;
+    display: flex;
+    font-size: 5rem;
+    height: 100%;
+    justify-content: center;
+    width: 100%;
+}
 .section-card-header {
     align-items: center;
     display: flex;

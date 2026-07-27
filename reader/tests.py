@@ -1,9 +1,11 @@
 from io import BytesIO
+from io import StringIO
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.management import call_command
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework.test import APITestCase
 
@@ -15,7 +17,7 @@ from .services.streaming import (
     tokenize_display_text,
 )
 from .services.text_preparation import prepare_for_speech
-from .services.tts import split_text
+from .services.tts import azure_ssml, finalize_azure_timings, split_text
 
 User = get_user_model()
 
@@ -60,6 +62,16 @@ class ExtractorTests(TestCase):
         self.assertIn("referência 12", prepared)
         self.assertIn("25 por cento", prepared)
         self.assertIn("volume 3", prepared)
+
+    def test_builds_safe_azure_ssml_with_requested_speed(self):
+        ssml = azure_ssml(
+            "Pesquisa & desenvolvimento <aberto>.",
+            "pt-BR-FranciscaNeural",
+            204,
+        )
+        self.assertIn('rate="+20%"', ssml)
+        self.assertIn("Pesquisa &amp; desenvolvimento &lt;aberto&gt;.", ssml)
+        self.assertIn('name="pt-BR-FranciscaNeural"', ssml)
 
 
 class StreamingTests(TestCase):
@@ -111,6 +123,39 @@ class StreamingTests(TestCase):
         self.assertEqual(timings[-1]["text"], "25%.")
         self.assertEqual(timings[-1]["end"], 2.0)
 
+    def test_azure_boundaries_keep_punctuation_pause_on_previous_word(self):
+        timings = finalize_azure_timings(
+            [
+                {"text": "Olá", "start": 0.2},
+                {"text": ",", "start": 0.7},
+                {"text": "mundo", "start": 1.4},
+                {"text": ".", "start": 2.0},
+                {"text": "Depois", "start": 2.8},
+            ],
+            3.5,
+        )
+        self.assertEqual(timings[0], ["Olá", 0.2, 1.4])
+        self.assertEqual(timings[1], ["mundo", 1.4, 2.8])
+        self.assertEqual(timings[2], ["Depois", 2.8, 3.5])
+
+
+class VoiceCatalogTests(TestCase):
+    @override_settings(AZURE_SPEECH_ENABLED=True)
+    def test_azure_configuration_activates_exactly_four_cloud_voices(self):
+        call_command("seed_voices", stdout=StringIO())
+        active = Voice.objects.filter(is_active=True)
+        self.assertEqual(active.count(), 4)
+        self.assertFalse(active.exclude(provider=Voice.Provider.AZURE).exists())
+        self.assertEqual(active.filter(is_default=True).get().name, "Francisca")
+
+    @override_settings(AZURE_SPEECH_ENABLED=False)
+    def test_missing_azure_configuration_restores_local_catalog(self):
+        call_command("seed_voices", stdout=StringIO())
+        active = Voice.objects.filter(is_active=True)
+        self.assertEqual(active.count(), 3)
+        self.assertFalse(active.exclude(provider=Voice.Provider.KOKORO).exists())
+        self.assertEqual(active.filter(is_default=True).get().name, "Lia")
+
 
 class WebViewsTests(BaseReaderTest):
     def test_login_is_required(self):
@@ -120,6 +165,11 @@ class WebViewsTests(BaseReaderTest):
             f"{reverse('login')}?next={reverse('reader:dashboard')}",
         )
 
+    @override_settings(ALLOW_PUBLIC_REGISTRATION=False)
+    def test_public_registration_can_be_disabled(self):
+        response = self.client.get(reverse("register"))
+        self.assertEqual(response.status_code, 404)
+
     def test_library_only_shows_own_documents(self):
         other = User.objects.create_user("outro", password="senha-forte-123")
         own = self.make_document(title="Meu documento")
@@ -128,6 +178,23 @@ class WebViewsTests(BaseReaderTest):
         response = self.client.get(reverse("reader:document-list"))
         self.assertContains(response, own.title)
         self.assertNotContains(response, "Documento alheio")
+
+    def test_media_file_is_available_only_to_its_owner(self):
+        document = self.make_document(
+            original_file=SimpleUploadedFile(
+                "artigo.txt", b"conteudo privado", content_type="text/plain"
+            )
+        )
+        other = User.objects.create_user("outro", password="senha-forte-123")
+
+        self.client.force_login(self.user)
+        response = self.client.get(document.original_file.url)
+        self.assertEqual(response.status_code, 200)
+        response.close()
+
+        self.client.force_login(other)
+        response = self.client.get(document.original_file.url)
+        self.assertEqual(response.status_code, 404)
 
     def test_new_document_uses_visual_voice_picker(self):
         self.client.force_login(self.user)

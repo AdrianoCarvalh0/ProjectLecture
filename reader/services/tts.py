@@ -1,13 +1,12 @@
 import base64
+import html
 import json
 import re
 import subprocess
 import urllib.error
 import urllib.request
 import wave
-import json
 from dataclasses import dataclass
-from pathlib import Path
 
 from django.conf import settings
 
@@ -117,11 +116,118 @@ def synthesize_neural(text, output_path, voice_code, words_per_minute):
         ) from exc
 
 
+def azure_rate(words_per_minute):
+    """Convert the UI's words-per-minute setting to an SSML percentage."""
+    percentage = round((words_per_minute / 170 - 1) * 100)
+    return min(75, max(-50, percentage))
+
+
+def azure_ssml(text, voice_code, words_per_minute):
+    rate = azure_rate(words_per_minute)
+    signed_rate = f"{rate:+d}%"
+    return (
+        '<speak version="1.0" '
+        'xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="pt-BR">'
+        f'<voice name="{html.escape(voice_code, quote=True)}">'
+        f'<prosody rate="{signed_rate}">{html.escape(text)}</prosody>'
+        "</voice></speak>"
+    )
+
+
+def finalize_azure_timings(boundaries, duration_seconds):
+    """Keep punctuation pauses attached to the preceding highlighted word."""
+    ordered = sorted(
+        (
+            {
+                "text": str(boundary["text"]),
+                "start": max(0.0, float(boundary["start"])),
+            }
+            for boundary in boundaries
+            if re.search(r"\w", str(boundary.get("text", "")), re.UNICODE)
+        ),
+        key=lambda boundary: boundary["start"],
+    )
+    timings = []
+    for index, boundary in enumerate(ordered):
+        next_start = (
+            ordered[index + 1]["start"]
+            if index + 1 < len(ordered)
+            else duration_seconds
+        )
+        end = max(boundary["start"], min(float(duration_seconds), next_start))
+        timings.append(
+            [
+                boundary["text"],
+                round(min(boundary["start"], duration_seconds), 4),
+                round(end, 4),
+            ]
+        )
+    return timings
+
+
+def synthesize_azure(text, output_path, voice_code, words_per_minute):
+    if not settings.AZURE_SPEECH_ENABLED:
+        raise RuntimeError(
+            "O Azure Speech não está configurado. Defina AZURE_SPEECH_KEY "
+            "e AZURE_SPEECH_REGION no ambiente do worker."
+        )
+
+    try:
+        import azure.cognitiveservices.speech as speechsdk
+    except ImportError as exc:
+        raise RuntimeError(
+            "O SDK do Azure Speech não está instalado no ambiente."
+        ) from exc
+
+    speech_config = speechsdk.SpeechConfig(
+        subscription=settings.AZURE_SPEECH_KEY,
+        region=settings.AZURE_SPEECH_REGION,
+    )
+    speech_config.set_speech_synthesis_output_format(
+        speechsdk.SpeechSynthesisOutputFormat.Riff24Khz16BitMonoPcm
+    )
+    audio_config = speechsdk.audio.AudioOutputConfig(filename=str(output_path))
+    synthesizer = speechsdk.SpeechSynthesizer(
+        speech_config=speech_config,
+        audio_config=audio_config,
+    )
+    boundaries = []
+
+    def collect_boundary(event):
+        boundaries.append(
+            {
+                "text": event.text,
+                "start": event.audio_offset / 10_000_000,
+            }
+        )
+
+    synthesizer.synthesis_word_boundary.connect(collect_boundary)
+    result = synthesizer.speak_ssml_async(
+        azure_ssml(text, voice_code, words_per_minute)
+    ).get()
+
+    if result.reason != speechsdk.ResultReason.SynthesizingAudioCompleted:
+        cancellation = speechsdk.SpeechSynthesisCancellationDetails(result)
+        detail = cancellation.error_details or str(cancellation.reason)
+        if "429" in detail or "quota" in detail.lower():
+            raise RuntimeError(
+                "O limite gratuito mensal ou de solicitações do Azure Speech "
+                "foi atingido. Tente novamente mais tarde."
+            )
+        raise RuntimeError(f"O Azure Speech recusou a síntese: {detail}")
+
+    with wave.open(str(output_path), "rb") as audio:
+        duration = audio.getnframes() / audio.getframerate()
+    return finalize_azure_timings(boundaries, duration)
+
+
 def synthesize_segment(
     text, output_path, voice_code, words_per_minute, provider="espeak"
 ):
     if provider in {"kokoro", "chatterbox"}:
         return synthesize_neural(text, output_path, voice_code, words_per_minute)
+    if provider == "azure":
+        return synthesize_azure(text, output_path, voice_code, words_per_minute)
     command = [
         "espeak-ng",
         "-v",

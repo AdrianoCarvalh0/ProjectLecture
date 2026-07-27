@@ -9,6 +9,7 @@ class Voice(models.Model):
         ESPEAK = "espeak", "Local básica"
         KOKORO = "kokoro", "Neural Kokoro"
         CHATTERBOX = "chatterbox", "Neural Chatterbox"
+        AZURE = "azure", "Azure Speech"
 
     name = models.CharField("nome", max_length=80)
     code = models.CharField("código", max_length=40, unique=True)

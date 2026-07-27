@@ -1,0 +1,86 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+
+packages:
+  - ca-certificates
+  - curl
+  - docker.io
+  - docker-compose-v2
+  - git
+  - openssl
+  - rsync
+
+write_files:
+  - path: /etc/sysctl.d/99-projectlecture.conf
+    permissions: "0644"
+    content: |
+      vm.swappiness=10
+      vm.vfs_cache_pressure=50
+
+  - path: /etc/systemd/system/projectlecture.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=ProjectLecture Docker Compose
+      Requires=docker.service
+      After=docker.service network-online.target
+      Wants=network-online.target
+      ConditionPathExists=/opt/projectlecture/.env.prod
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      User=__ADMIN_USERNAME__
+      Group=__ADMIN_USERNAME__
+      WorkingDirectory=/opt/projectlecture
+      ExecStart=/usr/bin/docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
+      ExecStop=/usr/bin/docker compose --env-file .env.prod -f docker-compose.prod.yml down
+      TimeoutStartSec=0
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/systemd/system/projectlecture-backup.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Backup diário do ProjectLecture
+      Requires=docker.service
+      After=docker.service
+      ConditionPathExists=/opt/projectlecture/.env.prod
+
+      [Service]
+      Type=oneshot
+      User=__ADMIN_USERNAME__
+      Group=__ADMIN_USERNAME__
+      WorkingDirectory=/opt/projectlecture
+      ExecStart=/opt/projectlecture/scripts/prod/backup.sh
+
+  - path: /etc/systemd/system/projectlecture-backup.timer
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Agenda o backup diário do ProjectLecture
+
+      [Timer]
+      OnCalendar=*-*-* 03:17:00
+      Persistent=true
+      RandomizedDelaySec=10m
+
+      [Install]
+      WantedBy=timers.target
+
+runcmd:
+  - [systemctl, enable, --now, docker]
+  - [usermod, -aG, docker, __ADMIN_USERNAME__]
+  - [mkdir, -p, /opt/projectlecture/backups]
+  - [chown, -R, "__ADMIN_USERNAME__:__ADMIN_USERNAME__", /opt/projectlecture]
+  - [fallocate, -l, 2G, /swapfile]
+  - [chmod, "600", /swapfile]
+  - [mkswap, /swapfile]
+  - [swapon, /swapfile]
+  - [sh, -c, "grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab"]
+  - [sysctl, --system]
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, --now, projectlecture-backup.timer]

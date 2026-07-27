@@ -1,0 +1,181 @@
+name: projectlecture
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-app: &app
+  image: projectlecture-app:${APP_VERSION:-latest}
+  build:
+    context: .
+    dockerfile: Dockerfile
+  env_file:
+    - ${PROJECTLECTURE_ENV_FILE:-.env.prod}
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  volumes:
+    - media_data:/app/media
+    - static_data:/app/staticfiles
+  networks:
+    - backend
+  logging: *default-logging
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    env_file:
+      - ${PROJECTLECTURE_ENV_FILE:-.env.prod}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --innodb-buffer-pool-size=128M
+      - --max-connections=40
+      - --performance-schema=OFF
+      - --table-open-cache=256
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/mysql/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - backend
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD --silent",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    mem_limit: 384m
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--maxmemory",
+        "64mb",
+        "--maxmemory-policy",
+        "noeviction",
+      ]
+    volumes:
+      - redis_data:/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    mem_limit: 96m
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+
+  web:
+    <<: *app
+    command:
+      [
+        "gunicorn",
+        "config.wsgi:application",
+        "--bind",
+        "0.0.0.0:8000",
+        "--worker-class",
+        "gthread",
+        "--workers",
+        "1",
+        "--threads",
+        "2",
+        "--timeout",
+        "120",
+        "--access-logfile",
+        "-",
+        "--error-logfile",
+        "-",
+      ]
+    environment:
+      RUN_MIGRATIONS: "1"
+    networks:
+      - backend
+      - edge
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os, urllib.request; request=urllib.request.Request('http://localhost:8000/health/', headers={'Host': os.environ['PROJECTLECTURE_DOMAIN'], 'X-Forwarded-Proto': 'https'}); urllib.request.urlopen(request, timeout=3)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    mem_limit: 256m
+
+  worker:
+    <<: *app
+    command: celery -A config worker -l INFO --concurrency=1 --max-tasks-per-child=40
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    mem_limit: 256m
+    stop_grace_period: 30s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    env_file:
+      - ${PROJECTLECTURE_ENV_FILE:-.env.prod}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - edge
+    depends_on:
+      web:
+        condition: service_healthy
+    mem_limit: 96m
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  backend:
+    internal: true
+  edge:
+
+volumes:
+  mysql_data:
+  redis_data:
+  media_data:
+  static_data:
+  caddy_data:
+  caddy_config:

@@ -1,8 +1,13 @@
+import mimetypes
+from pathlib import PurePosixPath
+
 from django.contrib import messages
 from django.contrib.auth import login
+from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.conf import settings
+from django.core.files.storage import default_storage
 from django.db.models import Count
 from django.db import connection
 from django.http import FileResponse, Http404, JsonResponse
@@ -12,7 +17,7 @@ from django.utils.text import slugify
 from django.views.generic import CreateView, DeleteView, DetailView, FormView, ListView, TemplateView
 
 from .forms import DocumentForm, RegenerateAudioForm
-from .models import Document, Voice
+from .models import AudioSegment, Document, Voice
 from .services.extractors import ExtractionError, extract_text, source_type_for
 from .services.streaming import tokenize_display_text
 from .services.text_preparation import prepare_for_speech
@@ -25,10 +30,45 @@ def healthcheck(request):
     return JsonResponse({"status": "ok"})
 
 
+@login_required
+def private_media(request, path):
+    media_path = PurePosixPath(path)
+    if media_path.is_absolute() or ".." in media_path.parts:
+        raise Http404
+
+    storage_name = media_path.as_posix()
+    owns_document_file = Document.objects.filter(owner=request.user).filter(
+        models_q(original_file=storage_name) | models_q(audio_file=storage_name)
+    ).exists()
+    owns_segment_file = AudioSegment.objects.filter(
+        document__owner=request.user,
+        audio_file=storage_name,
+    ).exists()
+    if not (owns_document_file or owns_segment_file):
+        raise Http404
+
+    try:
+        media_file = default_storage.open(storage_name, "rb")
+    except (FileNotFoundError, OSError):
+        raise Http404
+
+    content_type, _ = mimetypes.guess_type(storage_name)
+    return FileResponse(
+        media_file,
+        content_type=content_type or "application/octet-stream",
+        filename=media_path.name,
+    )
+
+
 class RegisterView(CreateView):
     form_class = UserCreationForm
     template_name = "registration/register.html"
     success_url = reverse_lazy("reader:dashboard")
+
+    def dispatch(self, request, *args, **kwargs):
+        if not settings.ALLOW_PUBLIC_REGISTRATION:
+            raise Http404
+        return super().dispatch(request, *args, **kwargs)
 
     def form_valid(self, form):
         response = super().form_valid(form)
