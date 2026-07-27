@@ -76,30 +76,45 @@
 
     const showPicker = () => {
         const button = elements().button;
-        const view = new google.picker.View(google.picker.ViewId.DOCS);
-        view.setMimeTypes([
-            "application/pdf",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "application/epub+zip",
-            "text/plain",
-            "application/vnd.google-apps.document",
-        ].join(","));
-        const picker = new google.picker.PickerBuilder()
-            .setDeveloperKey(button.dataset.apiKey)
-            .setAppId(button.dataset.appId)
-            .setOAuthToken(state.accessToken)
-            .setOrigin(window.location.origin)
-            .addView(view)
-            .setCallback((data) => {
-                if (data.action !== google.picker.Action.PICKED) return;
-                const selected = data[google.picker.Response.DOCUMENTS][0];
-                importFile(
-                    selected[google.picker.Document.ID],
-                    selected[google.picker.Document.NAME] || "documento",
+        try {
+            if (!/^\d+$/.test(button.dataset.appId)) {
+                throw new Error(
+                    "GOOGLE_CLOUD_PROJECT_NUMBER deve ser o número inteiro do projeto.",
                 );
-            })
-            .build();
-        picker.setVisible(true);
+            }
+            const view = new google.picker.DocsView(google.picker.ViewId.DOCS);
+            view.setMode(google.picker.DocsViewMode.LIST);
+            view.setMimeTypes([
+                "application/pdf",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/epub+zip",
+                "text/plain",
+                "application/vnd.google-apps.document",
+            ].join(","));
+            const picker = new google.picker.PickerBuilder()
+                .addView(view)
+                .setOAuthToken(state.accessToken)
+                .setDeveloperKey(button.dataset.apiKey)
+                .setAppId(button.dataset.appId)
+                .setOrigin(window.location.origin)
+                .setCallback((data) => {
+                    if (data.action !== google.picker.Action.PICKED) return;
+                    const selected = data[google.picker.Response.DOCUMENTS][0];
+                    importFile(
+                        selected[google.picker.Document.ID],
+                        selected[google.picker.Document.NAME] || "documento",
+                    );
+                })
+                .build();
+            picker.setVisible(true);
+            setStatus("Escolha um arquivo na janela do Google Drive.");
+        } catch (error) {
+            console.error("Não foi possível abrir o Google Picker.", error);
+            setStatus(
+                error.message || "Não foi possível abrir o seletor do Google Drive.",
+                "is-error",
+            );
+        }
     };
 
     const authorizeAndPick = () => {
@@ -109,10 +124,14 @@
         }
         state.tokenClient.callback = (response) => {
             if (response.error) {
-                setStatus("O acesso ao Google Drive não foi autorizado.", "is-error");
+                setStatus(
+                    `O Google recusou a autorização: ${response.error}.`,
+                    "is-error",
+                );
                 return;
             }
             state.accessToken = response.access_token;
+            setStatus("Autorização concluída. Abrindo o Google Drive…", "is-loading");
             showPicker();
         };
         state.tokenClient.requestAccessToken({
@@ -122,9 +141,24 @@
 
     window.ProjectLectureDrive = {
         gapiLoaded() {
-            gapi.load("picker", () => {
-                state.pickerReady = true;
-                maybeEnable();
+            gapi.load("picker", {
+                callback: () => {
+                    state.pickerReady = true;
+                    maybeEnable();
+                },
+                onerror: () => {
+                    setStatus(
+                        "A biblioteca Google Picker não pôde ser carregada.",
+                        "is-error",
+                    );
+                },
+                timeout: 10000,
+                ontimeout: () => {
+                    setStatus(
+                        "O carregamento do Google Picker expirou. Atualize a página.",
+                        "is-error",
+                    );
+                },
             });
         },
         gisLoaded() {
