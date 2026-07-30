@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}{{ result.get_operation_display }} · ProjectLecture{% endblock %}
+{% block content %}
+<div class="reader-header">
+    <div>
+        {% if result.book %}<a class="back-link" href="{{ result.book.get_absolute_url }}"><i class="fa-solid fa-arrow-left"></i> {{ result.book.title }}</a>{% else %}<a class="back-link" href="{{ result.document.get_absolute_url }}"><i class="fa-solid fa-arrow-left"></i> {{ result.document.title }}</a>{% endif %}
+        <p class="eyebrow mt-3">{{ result.provider }}</p>
+        <h1>{{ result.get_operation_display }}{% if result.target_language %} · {{ result.target_language }}{% endif %}</h1>
+        <p>{{ result.model_name|default:"Aguardando o provedor" }}</p>
+    </div>
+</div>
+{% if result.status == 'ready' %}
+<article class="section-card ai-content">{{ result.content|linebreaks }}</article>
+{% elif result.status == 'failed' %}
+<div class="alert alert-danger"><strong>A operação falhou.</strong><div>{{ result.error_message }}</div></div>
+{% else %}
+<div class="processing-card" id="aiProcessing"><span class="processing-animation"><i class="fa-solid fa-wand-magic-sparkles"></i></span><div><h2>{{ result.get_status_display }}</h2><p>O conteúdo está sendo processado em segundo plano.</p></div><span class="spinner-border spinner-border-sm text-primary"></span></div>
+{% endif %}
+{% endblock %}
+{% block extra_js %}
+{% if result.status == 'pending' or result.status == 'processing' %}<script>window.setTimeout(() => window.location.reload(), 3000);</script>{% endif %}
+{% endblock %}

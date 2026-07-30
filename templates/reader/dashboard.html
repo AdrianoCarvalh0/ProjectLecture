@@ -14,7 +14,7 @@
     <div class="col-sm-6 col-xl-3">
         <div class="metric-card">
             <div class="metric-icon purple"><i class="fa-solid fa-book"></i></div>
-            <div><span>Na biblioteca</span><strong>{{ total }}</strong><small>documento{{ total|pluralize }}</small></div>
+            <div><span>Na biblioteca</span><strong>{{ total_items }}</strong><small>itens entre documentos e livros</small></div>
         </div>
     </div>
     <div class="col-sm-6 col-xl-3">
@@ -36,6 +36,39 @@
         </div>
     </div>
 </div>
+
+<div class="section-card mb-4">
+    <div class="section-card-header mb-0">
+        <div>
+            <h2>Uso neste mês</h2>
+            <p>{{ usage.readings }} de {{ app_configuration.max_readings_per_user_month }} leituras · {{ usage.ai_requests }} solicitações de IA</p>
+        </div>
+        <span class="status-badge status-ready"><span></span>{{ usage.synthesized_characters }} caracteres sintetizados</span>
+    </div>
+</div>
+
+{% if recent_books %}
+<div class="section-card mb-4">
+    <div class="section-card-header">
+        <div><h2>Livros recentes</h2><p>Leituras longas organizadas em playlists internas.</p></div>
+        <a href="{% url 'reader:book-list' %}">Ver livros <i class="fa-solid fa-arrow-right ms-1"></i></a>
+    </div>
+    <div class="document-grid">
+        {% for book in recent_books %}
+        <a class="document-card book-card" href="{{ book.get_absolute_url }}">
+            <div class="document-card-top">
+                <span class="file-icon pdf"><i class="fa-solid fa-book-bookmark"></i></span>
+                <span class="status-badge status-{{ book.status }}"><span></span>{{ book.get_status_display }}</span>
+            </div>
+            <h3>{{ book.title }}</h3>
+            <p>{{ book.parts.count }} parte{{ book.parts.count|pluralize }} · {{ book.page_count }} página{{ book.page_count|pluralize }}</p>
+            <div class="progress-track"><span style="width: {{ book.progress_percent }}%"></span></div>
+            <div class="document-card-meta"><span>{{ book.progress_percent }}% ouvido</span><span>{{ book.created_at|date:"d/m/Y" }}</span></div>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
 
 <div class="section-card">
     <div class="section-card-header">

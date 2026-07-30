@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Adicionar livro · ProjectLecture{% endblock %}
+{% block content %}
+<div class="page-header compact">
+    <div><p class="eyebrow">Nova leitura longa</p><h1>Adicionar livro</h1><p>O arquivo será preservado e dividido apenas internamente.</p></div>
+</div>
+<form method="post" enctype="multipart/form-data" class="row g-4">
+    {% csrf_token %}
+    <div class="col-xl-8">
+        <div class="section-card form-card">
+            {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+            <div class="mb-4">
+                <label class="form-label" for="{{ form.title.id_for_label }}">{{ form.title.label }}</label>
+                {{ form.title }}
+            </div>
+            <label class="upload-zone" for="{{ form.original_file.id_for_label }}">
+                <span class="upload-icon"><i class="fa-solid fa-book-arrow-up"></i></span>
+                <strong>Selecione o livro</strong>
+                <span>{{ form.original_file.help_text }}</span>
+                {{ form.original_file }}
+            </label>
+            <p id="selectedFile" class="selected-file mb-0"></p>
+            {% for error in form.original_file.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+            <div class="privacy-note mt-4">
+                <i class="fa-solid fa-layer-group"></i>
+                <div><strong>Um único livro na estante</strong><span>As partes configuradas ficam ocultas e avançam automaticamente.</span></div>
+            </div>
+        </div>
+    </div>
+    <div class="col-xl-4">
+        <div class="section-card form-card sticky-xl-top settings-card">
+            <h2>Escolha seu narrador</h2>
+            <div class="voice-picker mb-4">
+                {% for voice in form.fields.voice.queryset %}
+                <label class="voice-option voice-provider-{{ voice.provider }}{% if form.voice.value|stringformat:'s' == voice.pk|stringformat:'s' or not form.is_bound and voice.is_default %} selected{% endif %}">
+                    <input type="radio" name="voice" value="{{ voice.pk }}" {% if form.voice.value|stringformat:'s' == voice.pk|stringformat:'s' or not form.is_bound and voice.is_default %}checked{% endif %}>
+                    <span class="voice-avatar">{% if voice.avatar %}<img src="{% static voice.avatar %}" alt="">{% else %}<strong>{{ voice.name|slice:":1" }}</strong>{% endif %}</span>
+                    <span class="voice-copy"><span class="voice-name-row"><strong>{{ voice.name }}</strong><em>{{ voice.quality_label }}</em></span><small>{{ voice.style_label }}</small></span>
+                    <span class="voice-check"><i class="fa-solid fa-check"></i></span>
+                </label>
+                {% endfor %}
+            </div>
+            <div class="mb-4"><label class="form-label">{{ form.reading_mode.label }}</label>{{ form.reading_mode }}</div>
+            <div class="mb-4">
+                <div class="d-flex justify-content-between"><label class="form-label">Velocidade</label><strong><span id="speedValue">170</span> ppm</strong></div>
+                {{ form.speed }}
+            </div>
+            <button class="btn btn-primary btn-lg w-100" type="submit"><i class="fa-solid fa-wand-magic-sparkles me-2"></i>Preparar livro</button>
+        </div>
+    </div>
+</form>
+{% endblock %}

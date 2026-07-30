@@ -27,6 +27,7 @@ document.addEventListener("DOMContentLoaded", () => {
     let lastSavedAt = 0;
     let initialized = false;
     let switchingSource = false;
+    let preparingMore = false;
 
     const formatTime = (seconds) => {
         const safe = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
@@ -58,7 +59,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const updateDuration = () => {
         const duration = totalDuration();
         seekRange.max = Math.max(duration, 0.1);
-        totalTime.textContent = manifest?.building
+        totalTime.textContent = !manifest?.complete
             ? `${formatTime(duration)} gerados`
             : formatTime(duration);
     };
@@ -131,6 +132,17 @@ document.addEventListener("DOMContentLoaded", () => {
         if (readingPosition) {
             readingPosition.textContent = `Palavra ${wordNumber} de ${words.length}`;
         }
+        document.dispatchEvent(
+            new CustomEvent("projectlecture:activeword", {
+                detail: {
+                    charStart: Number(timing.char_start),
+                    charEnd: Number(timing.char_end),
+                    text: timing.text,
+                    playing: !audio.paused,
+                },
+            })
+        );
+        if (root.dataset.pdfMode === "true") return;
         const wordBounds = activeWord.getBoundingClientRect();
         const textBounds = readingText.getBoundingClientRect();
         if (
@@ -159,6 +171,56 @@ document.addEventListener("DOMContentLoaded", () => {
         preload.src = next.audio_url;
     };
 
+    const requestMore = async (startOrder = null) => {
+        if (
+            preparingMore ||
+            manifest?.complete ||
+            manifest?.building ||
+            !root.dataset.prepareUrl
+        ) {
+            return;
+        }
+        const requested =
+            startOrder ??
+            chunks.find(
+                (chunk) =>
+                    Number(chunk.order) > Number(currentChunk()?.order ?? -1) &&
+                    !readyChunk(chunk)
+            )?.order;
+        if (requested === undefined || requested === null) return;
+
+        preparingMore = true;
+        try {
+            const response = await fetch(root.dataset.prepareUrl, {
+                method: "POST",
+                headers: {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "X-CSRFToken": root.dataset.csrf,
+                },
+                body: JSON.stringify({order: Number(requested)}),
+            });
+            if (!response.ok) throw new Error("prepare");
+            manifest.building = true;
+            setStatus("Preparando os próximos minutos da leitura…", true);
+            scheduleRefresh(700);
+        } catch (_) {
+            setStatus("Não foi possível preparar o próximo trecho.", true);
+        } finally {
+            preparingMore = false;
+        }
+    };
+
+    const maybePrepareMore = () => {
+        if (chunkIndex < 0 || manifest?.complete || manifest?.building) return;
+        const laterChunks = chunks.slice(chunkIndex + 1);
+        const readyAhead = laterChunks.filter((chunk) => readyChunk(chunk)).length;
+        const firstPending = laterChunks.find((chunk) => !readyChunk(chunk));
+        if (firstPending && readyAhead <= 2) {
+            requestMore(firstPending.order);
+        }
+    };
+
     const loadChunk = async (
         index,
         {autoplay = false, charOffset = null, localTime = null} = {}
@@ -167,6 +229,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!readyChunk(chunk)) {
             desiredLoad = {order: chunk?.order, autoplay, charOffset, localTime};
             setStatus("Preparando este trecho da leitura…", true);
+            requestMore(chunk?.order);
             scheduleRefresh(900);
             return;
         }
@@ -205,11 +268,12 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         audio.playbackRate = Number(playbackRate.value);
         setStatus(
-            manifest?.building
-                ? `Trecho ${index + 1} pronto · os próximos continuam sendo preparados`
+            !manifest?.complete
+                ? `Trecho ${index + 1} pronto · os próximos serão preparados durante a leitura`
                 : `Trecho ${index + 1} de ${chunks.length}`
         );
         prefetchNext();
+        maybePrepareMore();
         updatePosition();
 
         if (autoplay) {
@@ -240,10 +304,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (requestedIndex >= 0 && readyChunk(chunks[requestedIndex])) {
                     const request = desiredLoad;
                     await loadChunk(requestedIndex, request);
-                } else if (!manifest.building && requestedIndex < 0) {
+                } else if (requestedIndex >= 0 && !manifest.building) {
+                    requestMore(desiredLoad.order);
+                } else if (manifest.complete && requestedIndex < 0) {
                     desiredLoad = null;
-                    saveProgress(true, true);
-                    setStatus("Leitura concluída");
+                    if (!(await continueWithNextPart())) {
+                        await saveProgress(true, true);
+                        setStatus("Leitura concluída");
+                    }
                 }
             }
 
@@ -318,6 +386,15 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     };
 
+    const continueWithNextPart = async () => {
+        const nextUrl = root.dataset.nextUrl;
+        if (!nextUrl) return false;
+        setStatus("Abrindo a próxima parte do livro…", true);
+        await saveProgress(true, true);
+        window.location.assign(nextUrl);
+        return true;
+    };
+
     const seekGlobal = (seconds, autoplay = !audio.paused) => {
         if (!chunks.length) return;
         const bounded = Math.max(0, Number(seconds));
@@ -330,16 +407,27 @@ document.addEventListener("DOMContentLoaded", () => {
     audio.addEventListener("timeupdate", () => {
         updatePosition();
         saveProgress();
+        maybePrepareMore();
     });
     audio.addEventListener("play", () => {
         playButton.innerHTML = '<i class="fa-solid fa-pause"></i>';
         playButton.setAttribute("aria-label", "Pausar");
         root.classList.add("is-playing");
+        document.dispatchEvent(
+            new CustomEvent("projectlecture:playback", {
+                detail: {playing: true},
+            })
+        );
     });
     audio.addEventListener("pause", () => {
         playButton.innerHTML = '<i class="fa-solid fa-play"></i>';
         playButton.setAttribute("aria-label", "Reproduzir");
         root.classList.remove("is-playing");
+        document.dispatchEvent(
+            new CustomEvent("projectlecture:playback", {
+                detail: {playing: false},
+            })
+        );
         if (!switchingSource) saveProgress(true);
     });
     audio.addEventListener("ended", async () => {
@@ -348,19 +436,22 @@ document.addEventListener("DOMContentLoaded", () => {
             await loadChunk(nextIndex, {autoplay: true, localTime: 0});
             return;
         }
-        if (manifest?.building) {
+        if (!manifest?.complete) {
             desiredLoad = {
                 order: Number(currentChunk()?.order || 0) + 1,
                 autoplay: true,
                 localTime: 0,
             };
             setStatus("Aguardando o próximo trecho…", true);
+            requestMore(desiredLoad.order);
             scheduleRefresh(600);
             return;
         }
         showActiveTiming((currentChunk()?.word_timings || []).at(-1));
-        saveProgress(true, true);
-        setStatus("Leitura concluída");
+        if (!(await continueWithNextPart())) {
+            await saveProgress(true, true);
+            setStatus("Leitura concluída");
+        }
     });
 
     playButton.addEventListener("click", () => {
@@ -396,6 +487,10 @@ document.addEventListener("DOMContentLoaded", () => {
             charOffset,
         });
     };
+    document.addEventListener("projectlecture:seekword", (event) => {
+        const word = wordsByStart.get(Number(event.detail?.charStart));
+        if (word) playFromWord(word);
+    });
     words.forEach((word) => {
         word.addEventListener("click", () => playFromWord(word));
         word.addEventListener("keydown", (event) => {

@@ -1,3 +1,4 @@
+import hashlib
 import mimetypes
 from pathlib import PurePosixPath
 
@@ -8,29 +9,49 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.conf import settings
 from django.core.files.storage import default_storage
 from django.db.models import Count
-from django.db import connection
+from django.db import connection, transaction
 from django.http import FileResponse, Http404, JsonResponse
 from django.shortcuts import redirect
-from django.urls import reverse_lazy
+from django.urls import reverse, reverse_lazy
 from django.utils.text import slugify
+from django.views.decorators.clickjacking import xframe_options_sameorigin
 from django.views.decorators.http import require_POST
 from django.views.generic import CreateView, DeleteView, DetailView, FormView, ListView, TemplateView
 
 from .forms import (
+    BookForm,
     DocumentForm,
     DriveImportForm,
     RegenerateAudioForm,
     RegistrationForm,
+    TranslationForm,
 )
-from .models import AudioSegment, Document, Voice
+from .models import AIResult, AudioSegment, Book, Document, Voice
 from .services.community import document_creation_limit_error
-from .services.extractors import ExtractionError, extract_text, source_type_for
+from .services.extractors import (
+    ExtractionError,
+    extract_text,
+    source_type_for,
+)
 from .services.google_drive import GoogleDriveImportError, download_selected_file
 from .services.kindle import document_as_epub
+from .services.language_detection import looks_like_english
+from .services.runtime_config import ai_is_configured, get_app_configuration
 from .services.streaming import tokenize_display_text
 from .services.text_preparation import prepare_for_speech
 from .services.tts import synthesize_segment
-from .tasks import dispatch_audio_generation
+from .services.usage import (
+    current_usage,
+    reading_limit_error,
+    register_ai_request,
+    register_reading,
+)
+from .tasks import (
+    dispatch_ai_generation,
+    dispatch_audio_generation,
+    dispatch_book_preparation,
+    ensure_book_audio_window,
+)
 
 
 def healthcheck(request):
@@ -39,6 +60,7 @@ def healthcheck(request):
 
 
 @login_required
+@xframe_options_sameorigin
 def private_media(request, path):
     media_path = PurePosixPath(path)
     if media_path.is_absolute() or ".." in media_path.parts:
@@ -52,7 +74,11 @@ def private_media(request, path):
         document__owner=request.user,
         audio_file=storage_name,
     ).exists()
-    if not (owns_document_file or owns_segment_file):
+    owns_book_file = Book.objects.filter(
+        owner=request.user,
+        original_file=storage_name,
+    ).exists()
+    if not (owns_document_file or owns_segment_file or owns_book_file):
         raise Http404
 
     try:
@@ -93,9 +119,10 @@ class DashboardView(LoginRequiredMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        documents = Document.objects.filter(owner=self.request.user).select_related(
-            "voice", "reading_progress"
-        )
+        documents = Document.objects.filter(
+            owner=self.request.user,
+            book__isnull=True,
+        ).select_related("voice", "reading_progress")
         counts = documents.aggregate(
             total=Count("id"),
             ready=Count("id", filter=models_q(status=Document.Status.READY)),
@@ -109,6 +136,11 @@ class DashboardView(LoginRequiredMixin, TemplateView):
         context.update(counts)
         context["characters"] = sum(doc.char_count for doc in documents)
         context["recent_documents"] = documents[:6]
+        books = Book.objects.filter(owner=self.request.user)
+        context["recent_books"] = books[:4]
+        context["total_items"] = counts["total"] + books.count()
+        context["usage"] = current_usage(self.request.user)
+        context["app_configuration"] = get_app_configuration()
         return context
 
 
@@ -124,9 +156,10 @@ class DocumentListView(LoginRequiredMixin, ListView):
     paginate_by = 12
 
     def get_queryset(self):
-        queryset = Document.objects.filter(owner=self.request.user).select_related(
-            "voice", "reading_progress"
-        )
+        queryset = Document.objects.filter(
+            owner=self.request.user,
+            book__isnull=True,
+        ).select_related("voice", "reading_progress")
         query = self.request.GET.get("q", "").strip()
         status = self.request.GET.get("status", "").strip()
         if query:
@@ -134,6 +167,105 @@ class DocumentListView(LoginRequiredMixin, ListView):
         if status in Document.Status.values:
             queryset = queryset.filter(status=status)
         return queryset
+
+
+class BookListView(LoginRequiredMixin, ListView):
+    template_name = "reader/book_list.html"
+    context_object_name = "books"
+    paginate_by = 12
+
+    def get_queryset(self):
+        queryset = Book.objects.filter(owner=self.request.user).prefetch_related(
+            "parts__reading_progress"
+        )
+        query = self.request.GET.get("q", "").strip()
+        if query:
+            queryset = queryset.filter(title__icontains=query)
+        return queryset
+
+
+class BookCreateView(LoginRequiredMixin, FormView):
+    form_class = BookForm
+    template_name = "reader/book_form.html"
+
+    def form_valid(self, form):
+        limit_error = document_creation_limit_error(self.request.user)
+        if limit_error:
+            form.add_error(None, limit_error)
+            return self.form_invalid(form)
+        monthly_error = reading_limit_error(self.request.user)
+        if monthly_error:
+            form.add_error(None, monthly_error)
+            return self.form_invalid(form)
+
+        uploaded = form.cleaned_data["original_file"]
+        source_type = source_type_for(uploaded.name)
+        with transaction.atomic():
+            book = Book.objects.create(
+                owner=self.request.user,
+                title=form.cleaned_data["title"],
+                original_file=uploaded,
+                source_type=source_type,
+                voice=form.cleaned_data["voice"],
+                speed=form.cleaned_data["speed"],
+                reading_mode=form.cleaned_data["reading_mode"],
+                status=Book.Status.PROCESSING,
+            )
+            register_reading(self.request.user, 0)
+
+        dispatch_book_preparation(book)
+        messages.success(
+            self.request,
+            "Livro recebido. A divisão em partes e a playlist estão sendo "
+            "preparadas em segundo plano.",
+        )
+        return redirect(book)
+
+
+class OwnedBookMixin(LoginRequiredMixin):
+    def get_queryset(self):
+        return Book.objects.filter(owner=self.request.user)
+
+
+class BookDetailView(OwnedBookMixin, DetailView):
+    template_name = "reader/book_detail.html"
+    context_object_name = "book"
+
+    def get_queryset(self):
+        return (
+            super()
+            .get_queryset()
+            .select_related("voice")
+            .prefetch_related("parts__reading_progress", "ai_results")
+        )
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["parts"] = self.object.parts.order_by("book_order")
+        context["ai_enabled"] = ai_is_configured()
+        context["summary_results"] = self.object.ai_results.filter(
+            operation=AIResult.Operation.SUMMARY
+        )
+        return context
+
+
+class BookDeleteView(OwnedBookMixin, DeleteView):
+    template_name = "reader/book_confirm_delete.html"
+    success_url = reverse_lazy("reader:book-list")
+
+    def form_valid(self, form):
+        book = self.get_object()
+        if book.original_file:
+            book.original_file.delete(save=False)
+        for document in book.parts.all():
+            if document.original_file:
+                document.original_file.delete(save=False)
+            if document.audio_file:
+                document.audio_file.delete(save=False)
+            for segment in document.segments.exclude(audio_file=""):
+                segment.audio_file.delete(save=False)
+        messages.success(self.request, "Livro removido da biblioteca.")
+        return super().form_valid(form)
 
 
 class DocumentCreateView(LoginRequiredMixin, FormView):
@@ -156,6 +288,10 @@ class DocumentCreateView(LoginRequiredMixin, FormView):
         if limit_error:
             form.add_error(None, limit_error)
             return self.form_invalid(form)
+        monthly_error = reading_limit_error(self.request.user)
+        if monthly_error:
+            form.add_error(None, monthly_error)
+            return self.form_invalid(form)
 
         uploaded = form.cleaned_data["original_file"]
         text = form.cleaned_data["text"].strip()
@@ -170,23 +306,27 @@ class DocumentCreateView(LoginRequiredMixin, FormView):
         if not text:
             form.add_error("original_file", "Nenhum texto legível foi encontrado.")
             return self.form_invalid(form)
-        if len(text) > settings.MAX_CHARACTERS_PER_DOCUMENT:
+        character_limit = get_app_configuration().book_part_characters
+        if len(text) > character_limit:
             form.add_error(
                 "original_file",
-                f"O conteúdo extraído excede {settings.MAX_CHARACTERS_PER_DOCUMENT:,} caracteres.",
+                "O conteúdo é grande demais para um documento. "
+                f"Envie-o em Livros; o limite aqui é {character_limit:,} caracteres.",
             )
             return self.form_invalid(form)
 
-        document = Document.objects.create(
-            owner=self.request.user,
-            title=form.cleaned_data["title"],
-            source_type=source_type_for(uploaded.name) if uploaded else Document.SourceType.TEXT,
-            original_file=uploaded,
-            extracted_text=text,
-            voice=form.cleaned_data["voice"],
-            speed=form.cleaned_data["speed"],
-            reading_mode=form.cleaned_data["reading_mode"],
-        )
+        with transaction.atomic():
+            document = Document.objects.create(
+                owner=self.request.user,
+                title=form.cleaned_data["title"],
+                source_type=source_type_for(uploaded.name) if uploaded else Document.SourceType.TEXT,
+                original_file=uploaded,
+                extracted_text=text,
+                voice=form.cleaned_data["voice"],
+                speed=form.cleaned_data["speed"],
+                reading_mode=form.cleaned_data["reading_mode"],
+            )
+            register_reading(self.request.user, len(text))
         dispatch_audio_generation(document)
         messages.success(
             self.request,
@@ -204,6 +344,9 @@ def import_from_google_drive(request):
     limit_error = document_creation_limit_error(request.user)
     if limit_error:
         return JsonResponse({"error": limit_error}, status=429)
+    monthly_error = reading_limit_error(request.user)
+    if monthly_error:
+        return JsonResponse({"error": monthly_error}, status=429)
 
     form = DriveImportForm(request.POST)
     if not form.is_valid():
@@ -230,27 +373,30 @@ def import_from_google_drive(request):
             {"error": "Nenhum texto legível foi encontrado no arquivo."},
             status=400,
         )
-    if len(text) > settings.MAX_CHARACTERS_PER_DOCUMENT:
+    character_limit = get_app_configuration().book_part_characters
+    if len(text) > character_limit:
         return JsonResponse(
             {
                 "error": (
-                    "O conteúdo extraído excede "
-                    f"{settings.MAX_CHARACTERS_PER_DOCUMENT:,} caracteres."
+                    "O conteúdo extraído deve ser importado como livro porque excede "
+                    f"{character_limit:,} caracteres."
                 )
             },
             status=400,
         )
 
-    document = Document.objects.create(
-        owner=request.user,
-        title=form.cleaned_data["title"],
-        source_type=source_type_for(uploaded.name),
-        original_file=uploaded,
-        extracted_text=text,
-        voice=form.cleaned_data["voice"],
-        speed=form.cleaned_data["speed"],
-        reading_mode=form.cleaned_data["reading_mode"],
-    )
+    with transaction.atomic():
+        document = Document.objects.create(
+            owner=request.user,
+            title=form.cleaned_data["title"],
+            source_type=source_type_for(uploaded.name),
+            original_file=uploaded,
+            extracted_text=text,
+            voice=form.cleaned_data["voice"],
+            speed=form.cleaned_data["speed"],
+            reading_mode=form.cleaned_data["reading_mode"],
+        )
+        register_reading(request.user, len(text))
     dispatch_audio_generation(document)
     messages.success(
         request,
@@ -272,12 +418,15 @@ class DocumentDetailView(OwnedDocumentMixin, DetailView):
         return (
             super()
             .get_queryset()
-            .select_related("voice", "reading_progress")
+            .select_related("voice", "reading_progress", "book")
             .prefetch_related("segments")
         )
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        if self.object.book_id and self.object.book.status == Book.Status.READY:
+            ensure_book_audio_window(self.object)
+            self.object.refresh_from_db()
         context["regenerate_form"] = RegenerateAudioForm(document=self.object)
         context["reading_tokens"] = tokenize_display_text(
             self.object.extracted_text
@@ -288,6 +437,50 @@ class DocumentDetailView(OwnedDocumentMixin, DetailView):
                 status="ready"
             ).exclude(audio_file="").exists()
         )
+        context["ai_enabled"] = ai_is_configured()
+        context["translation_available"] = looks_like_english(
+            self.object.extracted_text
+        )
+        context["translation_form"] = TranslationForm()
+        context["ai_results"] = self.object.ai_results.all()
+        if self.object.book_id:
+            siblings = self.object.book.parts.order_by("book_order")
+            context["previous_part"] = siblings.filter(
+                book_order__lt=self.object.book_order
+            ).last()
+            context["next_part"] = siblings.filter(
+                book_order__gt=self.object.book_order
+            ).first()
+            uses_derived_pdf = bool(self.object.original_file)
+            context["pdf_file"] = (
+                (self.object.original_file or self.object.book.original_file)
+                if self.object.source_type == Document.SourceType.PDF
+                else None
+            )
+            context["pdf_download_file"] = (
+                self.object.book.original_file
+                if self.object.book.source_type == Document.SourceType.PDF
+                else None
+            )
+            if uses_derived_pdf:
+                context["pdf_view_page_start"] = 1
+                context["pdf_view_page_end"] = (
+                    (self.object.page_end - self.object.page_start + 1)
+                    if self.object.page_start and self.object.page_end
+                    else 0
+                )
+            else:
+                context["pdf_view_page_start"] = self.object.page_start or 1
+                context["pdf_view_page_end"] = self.object.page_end or 0
+        else:
+            context["pdf_file"] = (
+                self.object.original_file
+                if self.object.source_type == Document.SourceType.PDF
+                else None
+            )
+            context["pdf_download_file"] = context["pdf_file"]
+            context["pdf_view_page_start"] = self.object.page_start or 1
+            context["pdf_view_page_end"] = self.object.page_end or 0
         return context
 
 
@@ -335,6 +528,10 @@ def regenerate_document(request, pk):
     document = Document.objects.filter(owner=request.user, pk=pk).first()
     if not document:
         raise Http404
+    monthly_error = reading_limit_error(request.user)
+    if monthly_error:
+        messages.error(request, monthly_error)
+        return redirect(document)
     if (
         document.status != Document.Status.PROCESSING
         and not document.stream_is_building
@@ -362,6 +559,7 @@ def regenerate_document(request, pk):
                 "updated_at",
             )
         )
+        register_reading(request.user, document.char_count)
         dispatch_audio_generation(document)
         messages.info(
             request,
@@ -397,3 +595,135 @@ def voice_preview(request, pk):
         content_type="audio/wav",
         filename=f"amostra-{voice.code}.wav",
     )
+
+
+def _queue_ai_result(request, *, operation, document=None, book=None):
+    configuration = get_app_configuration()
+    if not ai_is_configured(configuration):
+        messages.error(
+            request,
+            "A IA ainda não foi configurada pelo administrador.",
+        )
+        return redirect(book or document)
+
+    if book:
+        source_text = "\n\n".join(
+            book.parts.order_by("book_order").values_list(
+                "extracted_text",
+                flat=True,
+            )
+        )
+    else:
+        source_text = document.extracted_text
+    if len(source_text) > configuration.ai_max_input_characters:
+        messages.error(
+            request,
+            "O conteúdo ultrapassa o limite administrativo de "
+            f"{configuration.ai_max_input_characters:,} caracteres para IA.",
+        )
+        return redirect(book or document)
+
+    target_language = ""
+    if operation == AIResult.Operation.TRANSLATION:
+        if book:
+            raise Http404
+        if not looks_like_english(source_text):
+            messages.error(
+                request,
+                "A tradução está disponível somente para textos identificados em inglês.",
+            )
+            return redirect(document)
+        form = TranslationForm(request.POST)
+        if not form.is_valid():
+            messages.error(request, "Escolha um idioma de destino válido.")
+            return redirect(document)
+        target_language = form.cleaned_data["target_language"]
+
+    digest_source = "\0".join(
+        (
+            source_text,
+            operation,
+            target_language,
+            configuration.ai_provider,
+            configuration.openai_model,
+            configuration.azure_openai_deployment,
+        )
+    )
+    input_hash = hashlib.sha256(digest_source.encode("utf-8")).hexdigest()
+    existing = AIResult.objects.filter(
+        owner=request.user,
+        operation=operation,
+        target_language=target_language,
+        input_hash=input_hash,
+        status=AIResult.Status.READY,
+    ).first()
+    if existing:
+        messages.info(request, "Resultado recuperado do cache.")
+        return redirect("reader:ai-result", pk=existing.pk)
+
+    result = AIResult.objects.create(
+        owner=request.user,
+        document=document,
+        book=book,
+        operation=operation,
+        target_language=target_language,
+        input_hash=input_hash,
+        provider=configuration.ai_provider,
+    )
+    register_ai_request(request.user)
+    dispatch_ai_generation(result)
+    messages.info(
+        request,
+        f"{result.get_operation_display()} colocado na fila.",
+    )
+    return redirect("reader:ai-result", pk=result.pk)
+
+
+@login_required
+@require_POST
+def summarize_document(request, pk):
+    document = Document.objects.filter(owner=request.user, pk=pk).first()
+    if not document:
+        raise Http404
+    return _queue_ai_result(
+        request,
+        operation=AIResult.Operation.SUMMARY,
+        document=document,
+    )
+
+
+@login_required
+@require_POST
+def translate_document(request, pk):
+    document = Document.objects.filter(owner=request.user, pk=pk).first()
+    if not document:
+        raise Http404
+    return _queue_ai_result(
+        request,
+        operation=AIResult.Operation.TRANSLATION,
+        document=document,
+    )
+
+
+@login_required
+@require_POST
+def summarize_book(request, pk):
+    book = Book.objects.filter(owner=request.user, pk=pk).first()
+    if not book:
+        raise Http404
+    return _queue_ai_result(
+        request,
+        operation=AIResult.Operation.SUMMARY,
+        book=book,
+    )
+
+
+class AIResultDetailView(LoginRequiredMixin, DetailView):
+    template_name = "reader/ai_result.html"
+    context_object_name = "result"
+
+    def get_queryset(self):
+        return AIResult.objects.filter(owner=self.request.user).select_related(
+            "document",
+            "book",
+        )

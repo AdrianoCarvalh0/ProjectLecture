@@ -1,23 +1,34 @@
 {% extends "base.html" %}
 {% load static %}
 {% block title %}{{ document.title }} · ProjectLecture{% endblock %}
+{% block extra_css %}
+{% if next_part.original_file %}
+<link rel="prefetch" href="{{ next_part.original_file.url }}" as="fetch">
+{% endif %}
+{% endblock %}
 {% block content %}
 <div class="reader-header">
     <div>
+        {% if document.book %}
+        <a class="back-link" href="{{ document.book.get_absolute_url }}"><i class="fa-solid fa-arrow-left"></i> {{ document.book.title }}</a>
+        {% else %}
         <a class="back-link" href="{% url 'reader:document-list' %}"><i class="fa-solid fa-arrow-left"></i> Biblioteca</a>
+        {% endif %}
         <div class="d-flex align-items-center gap-2 mt-3 mb-2">
             <span class="status-badge status-{{ document.status }}"><span></span>{{ document.get_status_display }}</span>
             <span class="text-muted small">{{ document.get_source_type_display }}</span>
         </div>
         <h1>{{ document.title }}</h1>
-        <p>{{ document.char_count }} caracteres · {{ document.voice.name }} · {{ document.get_reading_mode_display }} · {{ document.speed }} ppm</p>
+        <p>{% if document.page_start %}páginas {{ document.page_start }}–{{ document.page_end }} · {% endif %}{{ document.char_count }} caracteres · {{ document.voice.name }} · {{ document.get_reading_mode_display }} · {{ document.speed }} ppm</p>
     </div>
     <div class="reader-actions">
         <button class="btn btn-primary" type="button" data-bs-toggle="modal" data-bs-target="#changeVoiceModal"
                 {% if document.status == 'processing' or document.stream_is_building %}disabled{% endif %}>
             <i class="fa-solid fa-microphone-lines me-2"></i>Trocar voz
         </button>
-        {% if document.original_file %}<a class="btn btn-outline-secondary" href="{{ document.original_file.url }}" download><i class="fa-solid fa-file-arrow-down me-2"></i>Original</a>{% endif %}
+        {% if pdf_download_file %}<a class="btn btn-outline-secondary" href="{{ pdf_download_file.url }}" download><i class="fa-solid fa-file-arrow-down me-2"></i>PDF original</a>{% elif document.original_file %}<a class="btn btn-outline-secondary" href="{{ document.original_file.url }}" download><i class="fa-solid fa-file-arrow-down me-2"></i>Original</a>{% endif %}
+        {% if previous_part %}<a class="btn btn-outline-secondary" href="{{ previous_part.get_absolute_url }}" title="Parte anterior"><i class="fa-solid fa-chevron-left"></i></a>{% endif %}
+        {% if next_part %}<a class="btn btn-outline-secondary" href="{{ next_part.get_absolute_url }}" title="Próxima parte"><i class="fa-solid fa-chevron-right"></i></a>{% endif %}
         <a class="btn btn-outline-secondary" href="{% url 'reader:document-kindle' document.pk %}">
             <i class="fa-solid fa-tablet-screen-button me-2"></i>Kindle
         </a>
@@ -50,18 +61,51 @@
 <div class="reader-layout">
     <section class="reading-pane">
         <div class="reading-toolbar">
-            <div><i class="fa-solid fa-align-left"></i> Texto extraído</div>
+            <div><i class="fa-solid {% if pdf_file %}fa-file-pdf{% else %}fa-align-left{% endif %}"></i> {% if pdf_file %}PDF original e texto sincronizado{% else %}Texto extraído{% endif %}</div>
             <span id="readingPosition">Início do documento</span>
         </div>
-        <article class="reading-text" id="readingText">
-            {% for token in reading_tokens %}{% if token.is_word %}<span class="reading-word" tabindex="0" role="button" data-char-start="{{ token.start_char }}" data-char-end="{{ token.end_char }}">{{ token.text }}</span>{% else %}{{ token.text }}{% endif %}{% endfor %}
+        {% if pdf_file %}
+        <div class="pdf-reader" id="pdfReader"
+             data-pdf-url="{{ pdf_file.url }}"
+             data-page-start="{{ pdf_view_page_start|default:1 }}"
+             data-page-end="{{ pdf_view_page_end|default:0 }}">
+            <div class="pdf-reader-toolbar">
+                <div class="pdf-reader-controls">
+                    <button type="button" id="pdfZoomOut" aria-label="Diminuir PDF"><i class="fa-solid fa-minus"></i></button>
+                    <span id="pdfZoomLabel">100%</span>
+                    <button type="button" id="pdfZoomIn" aria-label="Aumentar PDF"><i class="fa-solid fa-plus"></i></button>
+                </div>
+                <span id="pdfReaderStatus">Carregando PDF…</span>
+                <button class="pdf-follow-button active" type="button" id="pdfFollowButton" aria-pressed="true">
+                    <i class="fa-solid fa-location-crosshairs"></i>
+                    <span>Acompanhar leitura</span>
+                </button>
+                <button class="pdf-continue-button" type="button" id="pdfContinueButton" disabled>
+                    <i class="fa-solid fa-play"></i>
+                    <span>Continuar daqui</span>
+                </button>
+            </div>
+            <div class="pdf-reader-viewport" id="pdfViewport" tabindex="0">
+                <div class="pdf-document" id="pdfDocument" aria-label="PDF original: {{ document.title }}"></div>
+            </div>
+            <div class="pdf-reader-error d-none" id="pdfReaderError">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+                <div><strong>Não foi possível abrir o leitor sincronizado.</strong><span>O texto extraído foi exibido como alternativa.</span></div>
+            </div>
+        </div>
+        {% endif %}
+        <article class="reading-text{% if pdf_file %} pdf-sync-source{% endif %}" id="readingText"{% if pdf_file %} aria-hidden="true"{% endif %}>
+            {% for token in reading_tokens %}{% if token.is_word %}<span class="reading-word" {% if not pdf_file %}tabindex="0" role="button"{% endif %} data-char-start="{{ token.start_char }}" data-char-end="{{ token.end_char }}">{{ token.text }}</span>{% else %}{{ token.text }}{% endif %}{% endfor %}
         </article>
     </section>
     <aside class="player-pane">
         <div class="player-card" id="readerPlayer"
              data-manifest-url="/api/documents/{{ document.pk }}/stream/"
+             data-prepare-url="/api/documents/{{ document.pk }}/stream-prepare/"
              data-progress-url="/api/documents/{{ document.pk }}/progress/"
              data-csrf="{{ csrf_token }}"
+             data-next-url="{% if next_part %}{{ next_part.get_absolute_url }}{% endif %}"
+             data-pdf-mode="{% if pdf_file %}true{% else %}false{% endif %}"
              data-resume="{% if document.reading_progress %}{{ document.reading_progress.position_seconds }}{% else %}0{% endif %}"
              data-resume-char="{% if document.reading_progress %}{{ document.reading_progress.char_offset }}{% else %}0{% endif %}">
             <div class="player-art{% if document.voice.avatar %} has-narrator{% endif %}">
@@ -104,6 +148,24 @@
             {% endif %}
         </div>
     </aside>
+</div>
+
+<div class="section-card ai-tools mt-4">
+    <div class="section-card-header">
+        <div><h2>Assistente de leitura</h2><p>{% if translation_available %}Resuma o conteúdo ou traduza este texto em inglês.{% else %}Gere um resumo deste conteúdo.{% endif %}</p></div>
+        {% if not ai_enabled %}<span class="status-badge status-pending"><span></span>Configuração necessária</span>{% endif %}
+    </div>
+    <div class="ai-actions">
+        <form method="post" action="{% url 'reader:document-summary' document.pk %}">{% csrf_token %}<button class="btn btn-outline-primary" type="submit" {% if not ai_enabled %}disabled{% endif %}><i class="fa-solid fa-wand-magic-sparkles me-2"></i>Gerar resumo</button></form>
+        {% if translation_available %}
+        <form method="post" action="{% url 'reader:document-translation' document.pk %}" class="d-flex gap-2">{% csrf_token %}{{ translation_form.target_language }}<button class="btn btn-outline-primary" type="submit" {% if not ai_enabled %}disabled{% endif %}><i class="fa-solid fa-language me-2"></i>Traduzir</button></form>
+        {% endif %}
+    </div>
+    {% if ai_results %}
+    <div class="ai-result-list mt-3">
+        {% for result in ai_results %}<a class="ai-result-link" href="{% url 'reader:ai-result' result.pk %}"><strong>{{ result.get_operation_display }}{% if result.target_language %} · {{ result.target_language }}{% endif %}</strong><span>{{ result.get_status_display }}</span><small>{{ result.created_at|date:"d/m/Y H:i" }}</small></a>{% endfor %}
+    </div>
+    {% endif %}
 </div>
 
 <div class="modal fade" id="changeVoiceModal" tabindex="-1" aria-labelledby="changeVoiceTitle" aria-hidden="true">
@@ -173,6 +235,7 @@
 </div>
 {% endblock %}
 {% block extra_js %}
+{% if pdf_file %}<script type="module" src="{% static 'js/pdf-reader.js' %}"></script>{% endif %}
 {% if document.status == 'ready' and stream_available %}
 <script src="{% static 'js/player.js' %}"></script>
 {% else %}

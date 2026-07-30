@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}{{ book.title }} · Livros{% endblock %}
+{% block content %}
+<div class="reader-header">
+    <div>
+        <a class="back-link" href="{% url 'reader:book-list' %}"><i class="fa-solid fa-arrow-left"></i> Livros</a>
+        <div class="d-flex align-items-center gap-2 mt-3 mb-2">
+            <span class="status-badge status-{{ book.status }}"><span></span>{{ book.get_status_display }}</span>
+            <span class="text-muted small">{{ book.source_type|upper }}</span>
+        </div>
+        <h1>{{ book.title }}</h1>
+        {% if book.status == 'processing' %}
+        <p>Dividindo o arquivo e montando a playlist…</p>
+        {% else %}
+        <p>{{ book.parts.count }} parte{{ book.parts.count|pluralize }} · {{ book.page_count }} página{{ book.page_count|pluralize }} · {{ book.char_count }} caracteres</p>
+        {% endif %}
+    </div>
+    <div class="reader-actions">
+        {% with first=parts.first %}{% if first %}<a class="btn btn-primary" href="{{ first.get_absolute_url }}"><i class="fa-solid fa-play me-2"></i>Começar leitura</a>{% endif %}{% endwith %}
+        <a class="btn btn-outline-secondary" href="{{ book.original_file.url }}" download><i class="fa-solid fa-download me-2"></i>Original</a>
+        {% if ai_enabled and book.status == 'ready' %}
+        <form method="post" action="{% url 'reader:book-summary' book.pk %}">{% csrf_token %}<button class="btn btn-outline-primary" type="submit"><i class="fa-solid fa-wand-magic-sparkles me-2"></i>Resumir livro</button></form>
+        {% endif %}
+        <a class="btn btn-outline-danger" href="{% url 'reader:book-delete' book.pk %}"><i class="fa-solid fa-trash"></i></a>
+    </div>
+</div>
+{% if book.status == 'processing' %}
+<div class="processing-card" id="bookProcessingState">
+    <span class="processing-animation"><i class="fa-solid fa-layer-group"></i></span>
+    <div><h2>Preparando a playlist</h2><p>O arquivo está sendo dividido em partes leves. Nenhum áudio será gerado até você começar a leitura.</p></div>
+    <span class="spinner-border spinner-border-sm text-primary" role="status"></span>
+</div>
+{% elif book.status == 'failed' %}
+<div class="alert alert-danger d-flex align-items-start gap-3">
+    <i class="fa-solid fa-triangle-exclamation mt-1"></i>
+    <div><strong>Não foi possível preparar o livro.</strong><div>{{ book.error_message }}</div></div>
+</div>
+{% endif %}
+<div class="row g-4">
+    <div class="col-xl-8">
+        <div class="section-card">
+            <div class="section-card-header"><div><h2>Playlist do livro</h2><p>O leitor prepara poucos minutos conforme você avança.</p></div><span>{{ book.progress_percent }}%</span></div>
+            <div class="book-parts">
+                {% for part in parts %}
+                <a class="book-part" href="{{ part.get_absolute_url }}">
+                    <span class="book-part-order">{{ forloop.counter }}</span>
+                    <span class="book-part-copy"><strong>{% if part.page_start %}Páginas {{ part.page_start }}–{{ part.page_end }}{% else %}Parte {{ forloop.counter }}{% endif %}</strong><small>{{ part.char_count }} caracteres · {% if part.status == 'pending' %}áudio sob demanda{% else %}{{ part.get_status_display }}{% endif %}</small></span>
+                    <span class="book-part-progress">{{ part.progress_percent }}%</span>
+                    <i class="fa-solid fa-chevron-right"></i>
+                </a>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    <div class="col-xl-4">
+        <div class="section-card">
+            <h2>Resumos</h2>
+            {% for result in summary_results %}
+            <a class="ai-result-link" href="{% url 'reader:ai-result' result.pk %}"><span>{{ result.get_status_display }}</span><small>{{ result.created_at|date:"d/m/Y H:i" }}</small></a>
+            {% empty %}<p class="text-muted mb-0">Nenhum resumo solicitado.</p>{% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block extra_js %}
+{% if book.status == 'processing' %}
+<script>
+window.setTimeout(() => window.location.reload(), 3000);
+</script>
+{% endif %}
+{% endblock %}

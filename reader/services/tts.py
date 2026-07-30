@@ -10,6 +10,12 @@ from dataclasses import dataclass
 
 from django.conf import settings
 
+from .runtime_config import (
+    azure_speech_api_key,
+    azure_speech_region,
+    get_app_configuration,
+)
+
 
 MAX_SEGMENT_CHARS = 1200
 
@@ -166,10 +172,13 @@ def finalize_azure_timings(boundaries, duration_seconds):
 
 
 def synthesize_azure(text, output_path, voice_code, words_per_minute):
-    if not settings.AZURE_SPEECH_ENABLED:
+    configuration = get_app_configuration()
+    speech_key = azure_speech_api_key(configuration)
+    speech_region = azure_speech_region(configuration)
+    if not speech_key or not speech_region:
         raise RuntimeError(
-            "O Azure Speech não está configurado. Defina AZURE_SPEECH_KEY "
-            "e AZURE_SPEECH_REGION no ambiente do worker."
+            "O Azure Speech não está configurado. Cadastre a chave e a região "
+            "na configuração da aplicação ou no ambiente do worker."
         )
 
     try:
@@ -180,8 +189,8 @@ def synthesize_azure(text, output_path, voice_code, words_per_minute):
         ) from exc
 
     speech_config = speechsdk.SpeechConfig(
-        subscription=settings.AZURE_SPEECH_KEY,
-        region=settings.AZURE_SPEECH_REGION,
+        subscription=speech_key,
+        region=speech_region,
     )
     speech_config.set_speech_synthesis_output_format(
         speechsdk.SpeechSynthesisOutputFormat.Riff24Khz16BitMonoPcm

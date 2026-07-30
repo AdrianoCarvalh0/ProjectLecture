@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Excluir livro · ProjectLecture{% endblock %}
+{% block content %}
+<div class="section-card empty-state">
+    <div class="empty-icon text-danger"><i class="fa-solid fa-trash"></i></div>
+    <h1>Excluir “{{ object.title }}”?</h1>
+    <p>O livro, suas partes, progresso e áudios serão removidos.</p>
+    <form method="post">{% csrf_token %}<a class="btn btn-outline-secondary" href="{{ object.get_absolute_url }}">Cancelar</a> <button class="btn btn-danger" type="submit">Excluir livro</button></form>
+</div>
+{% endblock %}

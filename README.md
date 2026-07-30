@@ -6,10 +6,17 @@ Leitor comunitário de documentos com Django, API REST interna, MySQL, Celery/Re
 
 - cadastro público por e-mail, login Google opcional e isolamento da biblioteca por usuário;
 - criação por texto colado ou upload de PDF, DOCX, EPUB e TXT;
+- estante de livros com preparação assíncrona, divisão física de PDF e playlist
+  contínua;
+- visualização sincronizada de partes leves do PDF, preservando o original para
+  download;
+- remoção de cabeçalhos/rodapés repetidos, números de página e linhas decorativas
+  antes da narração;
 - importação pontual de PDF, DOCX, EPUB, TXT e Google Docs pelo Google Drive;
 - exportação EPUB compatível com o fluxo oficial Enviar para Kindle;
 - extração de texto com PyMuPDF, python-docx e EbookLib;
-- geração progressiva e assíncrona em pequenos blocos com Celery;
+- geração progressiva e assíncrona em pequenas janelas de áudio com Celery,
+  acompanhando o avanço real do usuário;
 - quatro vozes neurais brasileiras do Azure Speech quando uma conta F0 é configurada;
 - TTS neural local alternativo com Kokoro-82M, sem chave externa ou cobrança por caractere;
 - catálogo automático: Azure configurado usa Francisca, Antonio, Thalita e Donato;
@@ -19,6 +26,11 @@ Leitor comunitário de documentos com Django, API REST interna, MySQL, Celery/Re
 - destaque palavra a palavra, clique no texto para iniciar ou pausar e troca
   transparente entre os blocos;
 - retomada automática pelo caractere exato, mesmo após sair da página;
+- cache persistente dos trechos sintetizados para não gerar novamente o mesmo
+  áudio;
+- resumos de artigos, capítulos e livros e tradução de artigos por OpenAI ou
+  Azure OpenAI;
+- limites de biblioteca e uso mensal configuráveis pelo Django Admin;
 - API REST autenticada para documentos, vozes e progresso;
 - painel responsivo baseado no SB Admin/Bootstrap 5;
 - MySQL 8.4 e Redis em Docker.
@@ -48,9 +60,57 @@ Git. Antes de uma publicação externa, altere pelo menos
 `DJANGO_SECRET_KEY`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD`,
 `DJANGO_ALLOWED_HOSTS` e `DJANGO_CSRF_TRUSTED_ORIGINS`.
 
-Cada conta gratuita pode manter 50 documentos e criar até 10 por dia por
-padrão. Ajuste `MAX_DOCUMENTS_PER_USER` e
-`MAX_DOCUMENTS_PER_USER_PER_DAY` no `.env` se necessário.
+Cada conta pode manter 10 itens entre documentos e livros e solicitar 10 novas
+leituras por mês por padrão. Após criar o superusuário, abra
+`/admin/reader/appconfiguration/` para ajustar esses limites, tamanhos,
+particionamento, provedor de voz e IA. As variáveis do `.env` funcionam apenas
+como valores iniciais e fallback de segredos.
+
+## Livros, PDF e playlist
+
+Use **Livros → Adicionar livro** para enviar PDF, DOCX, EPUB ou TXT extensos. O
+arquivo original é armazenado uma única vez e o worker monta a playlist em
+segundo plano. O texto é dividido em partes de 100 mil caracteres por padrão;
+em PDFs, cada parte também recebe um arquivo físico derivado de no máximo 10
+páginas. Esses dois limites podem ser alterados no Admin. As partes não poluem
+a biblioteca e o player abre a próxima automaticamente depois de salvar o
+progresso.
+
+Preparar a playlist não gera narração. Quando o usuário abre uma parte, somente
+uma pequena janela inicial de áudio entra na fila. O player solicita outra
+janela quando restam poucos trechos prontos; o PDF da próxima parte pode ser
+antecipado, mas sua voz ainda não é sintetizada. As demais partes ficam como
+**áudio sob demanda**, evitando processamento e consumo do Azure para um livro
+que talvez não seja lido até o fim. `STREAM_CHUNK_CHARS` define o tamanho de
+cada trecho e `STREAM_PREFETCH_CHUNKS` quantos trechos são preparados por vez.
+
+Em PDFs, o leitor usa PDF.js para renderizar o arquivo leve da parte, destacar a
+palavra narrada e rolar automaticamente entre palavras e páginas. O usuário
+pode selecionar uma palavra e confirmar em **Continuar daqui**; uma rolagem
+manual suspende o acompanhamento até o botão **Retomar acompanhamento** ou a
+reprodução ser acionada. Para manter a interface leve, somente a página visível
+e uma pequena janela de páginas próximas conservam canvas, camada textual e
+áreas clicáveis. O texto extraído continua sendo usado internamente para a narração.
+Cabeçalhos e rodapés repetidos nas margens, números de página isolados e
+sequências decorativas como `___________` são retirados da fala. PDF composto
+apenas por imagens ainda precisa de OCR.
+
+## Resumos e traduções com IA
+
+No Admin, escolha **OpenAI** ou **Azure OpenAI** em **Configuração da
+aplicação**. Para OpenAI, informe o nome do modelo e a chave. Para Azure OpenAI,
+informe o endpoint do recurso, o nome da implantação e a chave. Os segredos são
+criptografados no banco usando `DJANGO_SECRET_KEY`; mantenha essa chave estável
+e protegida.
+
+Os artigos e as partes de livros oferecem resumo e tradução. A página do livro
+também oferece um resumo consolidado. Textos grandes são processados em blocos
+e consolidados em segundo plano pelo worker Celery. O resultado pronto é
+reutilizado quando a mesma operação é solicitada novamente.
+
+O botão de tradução aparece somente quando o conteúdo é identificado como
+inglês. Essa identificação é feita localmente, sem enviar o texto a outro
+serviço.
 
 ## Login Google e arquivos do Drive
 
@@ -101,14 +161,17 @@ Amazon não fornece uma API pública para o ProjectLecture ler ou alterar a
 posição de leitura do Kindle; portanto, nesta versão o progresso salvo no
 ProjectLecture e o progresso mantido pela Amazon permanecem separados.
 
-Sem credenciais do Azure, o catálogo usa as vozes locais Kokoro. No primeiro uso
-de uma delas, o serviço baixa seus arquivos para o volume persistente
-`model_cache`. Essa primeira amostra pode demorar; as próximas reutilizam o
-modelo e o cache.
+O ambiente de desenvolvimento usa Kokoro mesmo que as credenciais do Azure
+estejam presentes. No primeiro uso, o serviço baixa seus arquivos para o volume
+persistente `model_cache`. Essa primeira amostra pode demorar; as próximas
+reutilizam o modelo e o cache de áudio. Em produção, o modo automático seleciona
+Azure Speech.
 
 ## Vozes Azure Speech no nível gratuito
 
-Crie um recurso oficial Azure Speech no nível **Free F0** e acrescente ao `.env`:
+Crie um recurso oficial Azure Speech no nível **Free F0**. A chave e a região
+podem ser gravadas na **Configuração da aplicação** no Admin (recomendado) ou
+mantidas como fallback no `.env`:
 
 ```env
 AZURE_SPEECH_KEY=chave-do-recurso
@@ -124,9 +187,9 @@ docker compose up -d --build
 ```
 
 A chave é usada somente no servidor e nunca é enviada ao navegador. O `.env`
-real é ignorado pelo Git. Com Azure ativo, os quatro narradores disponíveis são
-Francisca, Antonio, Thalita e Donato; sem a chave, o sistema volta ao catálogo
-Kokoro local na próxima execução de `python manage.py seed_voices`.
+real é ignorado pelo Git. O provedor **Automático pelo ambiente** disponibiliza
+Lia, Caio e Ravi em desenvolvimento e Francisca, Antonio, Thalita e Donato em
+produção. Ele também pode ser fixado manualmente no Admin.
 
 O Azure retorna limites de palavra junto com a síntese. O ProjectLecture liga a
 pausa de vírgulas e pontos à palavra anterior, mantendo o destaque sincronizado.
@@ -170,7 +233,9 @@ docker compose up -d --force-recreate web
 ```
 
 O ngrok é apenas uma entrada temporária de desenvolvimento. A URL gratuita pode
-mudar quando o container reiniciar.
+mudar quando o container reiniciar. Como o túnel aponta para os mesmos
+containers locais, a síntese continua usando Kokoro; o computador precisa
+permanecer ligado e com o `worker` e o `neural-tts` saudáveis.
 
 ## Produção econômica no Azure for Students
 
@@ -182,7 +247,7 @@ O arquivo `docker-compose.prod.yml` foi dimensionado para uma VM pequena:
 - Azure Speech F0, sem o container Kokoro em produção;
 - Caddy como proxy reverso e HTTPS automático;
 - volumes persistentes para banco, mídia, fila e certificados;
-- cadastro público gratuito com limites por conta e por dia;
+- cadastro público gratuito com limites por conta e por mês;
 - backup diário de banco e mídia, com retenção padrão de sete dias.
 
 A infraestrutura Bicep cria uma VM Ubuntu 24.04 `Standard_B1s`, disco Standard

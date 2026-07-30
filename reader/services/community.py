@@ -1,21 +1,28 @@
-from django.conf import settings
 from django.utils import timezone
 
-from reader.models import Document
+from reader.models import Book, Document
+from reader.services.runtime_config import get_app_configuration
 
 
 def document_creation_limit_error(user):
-    total_limit = settings.MAX_DOCUMENTS_PER_USER
-    if total_limit > 0 and Document.objects.filter(owner=user).count() >= total_limit:
+    configuration = get_app_configuration()
+    total_limit = configuration.max_files_per_user
+    top_level_documents = Document.objects.filter(owner=user, book__isnull=True).count()
+    total_files = top_level_documents + Book.objects.filter(owner=user).count()
+    if total_limit > 0 and total_files >= total_limit:
         return (
-            f"Sua biblioteca atingiu o limite comunitário de {total_limit} documentos. "
+            f"Sua biblioteca atingiu o limite comunitário de {total_limit} arquivos. "
             "Exclua uma leitura antiga para adicionar outra."
         )
 
-    daily_limit = settings.MAX_DOCUMENTS_PER_USER_PER_DAY
+    daily_limit = configuration.max_files_per_user_day
     if daily_limit > 0:
         today = timezone.localdate()
         created_today = Document.objects.filter(
+            owner=user,
+            book__isnull=True,
+            created_at__date=today,
+        ).count() + Book.objects.filter(
             owner=user,
             created_at__date=today,
         ).count()

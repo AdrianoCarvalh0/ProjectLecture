@@ -6,6 +6,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.forms import UserCreationForm
 
 from .models import Document, Voice
+from .services.runtime_config import get_app_configuration
 
 User = get_user_model()
 
@@ -85,6 +86,11 @@ class DocumentForm(BootstrapFormMixin, forms.Form):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        configuration = get_app_configuration()
+        self.fields["original_file"].help_text = (
+            "PDF, DOCX, EPUB ou TXT. "
+            f"Limite configurado: {configuration.max_document_size_mb} MB."
+        )
         voices = Voice.objects.filter(is_active=True).order_by("-is_default", "name")
         self.fields["voice"].queryset = voices
         default_voice = voices.filter(is_default=True).first() or voices.first()
@@ -100,9 +106,11 @@ class DocumentForm(BootstrapFormMixin, forms.Form):
             raise forms.ValidationError("Cole um texto ou selecione um arquivo.")
         if text and original_file:
             raise forms.ValidationError("Use somente uma origem: texto colado ou arquivo.")
-        if len(text) > settings.MAX_CHARACTERS_PER_DOCUMENT:
+        configuration = get_app_configuration()
+        if len(text) > configuration.book_part_characters:
             raise forms.ValidationError(
-                f"O texto excede o limite de {settings.MAX_CHARACTERS_PER_DOCUMENT:,} caracteres."
+                "Textos maiores devem ser enviados como livro. "
+                f"Limite de documento: {configuration.book_part_characters:,} caracteres."
             )
         return cleaned
 
@@ -114,12 +122,85 @@ class DocumentForm(BootstrapFormMixin, forms.Form):
         extension = Path(uploaded.name).suffix.lower()
         if extension not in allowed:
             raise forms.ValidationError("Formato inválido. Envie PDF, DOCX, EPUB ou TXT.")
-        max_bytes = settings.MAX_DOCUMENT_SIZE_MB * 1024 * 1024
+        configuration = get_app_configuration()
+        max_bytes = configuration.max_document_size_mb * 1024 * 1024
         if uploaded.size > max_bytes:
             raise forms.ValidationError(
-                f"O arquivo excede o limite de {settings.MAX_DOCUMENT_SIZE_MB} MB."
+                f"O arquivo excede o limite de {configuration.max_document_size_mb} MB."
             )
         return uploaded
+
+
+class BookForm(BootstrapFormMixin, forms.Form):
+    title = forms.CharField(label="Título do livro", max_length=180)
+    original_file = forms.FileField(
+        label="Arquivo do livro",
+        help_text="PDF, DOCX, EPUB ou TXT.",
+    )
+    voice = forms.ModelChoiceField(
+        label="Voz", queryset=Voice.objects.none(), empty_label=None
+    )
+    reading_mode = forms.ChoiceField(
+        label="Modo de leitura",
+        choices=Document.ReadingMode.choices,
+        initial=Document.ReadingMode.NATURAL,
+    )
+    speed = forms.IntegerField(
+        label="Velocidade",
+        min_value=80,
+        max_value=320,
+        initial=170,
+        widget=forms.NumberInput(attrs={"step": 10}),
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        configuration = get_app_configuration()
+        self.fields["original_file"].help_text = (
+            "PDF, DOCX, EPUB ou TXT. O livro será dividido internamente em partes "
+            f"de até {configuration.book_part_characters:,} caracteres"
+            f" e, para PDF, {configuration.book_part_pages} páginas. "
+            f"Limite: {configuration.max_book_size_mb} MB."
+        )
+        voices = Voice.objects.filter(is_active=True).order_by("-is_default", "name")
+        self.fields["voice"].queryset = voices
+        default_voice = voices.filter(is_default=True).first() or voices.first()
+        if default_voice:
+            self.fields["voice"].initial = default_voice
+        self.apply_bootstrap()
+
+    def clean_original_file(self):
+        uploaded = self.cleaned_data["original_file"]
+        extension = Path(uploaded.name).suffix.lower()
+        if extension not in {".pdf", ".docx", ".epub", ".txt"}:
+            raise forms.ValidationError(
+                "Formato inválido. Envie PDF, DOCX, EPUB ou TXT."
+            )
+        maximum = get_app_configuration().max_book_size_mb * 1024 * 1024
+        if uploaded.size > maximum:
+            raise forms.ValidationError(
+                "O livro excede o limite configurado de "
+                f"{get_app_configuration().max_book_size_mb} MB."
+            )
+        return uploaded
+
+
+class TranslationForm(BootstrapFormMixin, forms.Form):
+    target_language = forms.ChoiceField(
+        label="Traduzir para",
+        choices=(
+            ("Português do Brasil", "Português do Brasil"),
+            ("Inglês", "Inglês"),
+            ("Espanhol", "Espanhol"),
+            ("Francês", "Francês"),
+            ("Italiano", "Italiano"),
+            ("Alemão", "Alemão"),
+        ),
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.apply_bootstrap()
 
 
 class DriveImportForm(BootstrapFormMixin, forms.Form):

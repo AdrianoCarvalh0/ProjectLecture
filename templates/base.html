@@ -23,9 +23,15 @@
         <i class="fas fa-bars"></i>
     </button>
     <div class="ms-auto me-3 d-flex align-items-center gap-3">
-        <a class="btn btn-primary btn-sm d-none d-sm-inline-flex align-items-center gap-2" href="{% url 'reader:document-create' %}">
-            <i class="fa-solid fa-plus"></i> Novo documento
-        </a>
+        <div class="dropdown d-none d-sm-block">
+            <button class="btn btn-primary btn-sm dropdown-toggle" data-bs-toggle="dropdown">
+                <i class="fa-solid fa-plus me-2"></i>Adicionar
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end">
+                <li><a class="dropdown-item" href="{% url 'reader:document-create' %}"><i class="fa-solid fa-file-circle-plus me-2"></i>Documento</a></li>
+                <li><a class="dropdown-item" href="{% url 'reader:book-create' %}"><i class="fa-solid fa-book-medical me-2"></i>Livro</a></li>
+            </ul>
+        </div>
         <div class="dropdown">
             <button class="user-menu dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
                 <span class="avatar">{{ user.username|slice:":1"|upper }}</span>
@@ -33,7 +39,7 @@
             </button>
             <ul class="dropdown-menu dropdown-menu-end shadow-sm">
                 {% if user.is_staff %}
-                <li><a class="dropdown-item" href="/admin/"><i class="fa-solid fa-gear me-2"></i>Administração</a></li>
+                {% if user.is_staff %}<li><a class="dropdown-item" href="/admin/"><i class="fa-solid fa-gear me-2"></i>Administração</a></li>{% endif %}
                 <li><hr class="dropdown-divider"></li>
                 {% endif %}
                 <li>
@@ -60,9 +66,17 @@
                         <span class="sb-nav-link-icon"><i class="fa-solid fa-book-open"></i></span>
                         Biblioteca
                     </a>
+                    <a class="nav-link {% if 'book' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'reader:book-list' %}">
+                        <span class="sb-nav-link-icon"><i class="fa-solid fa-book-bookmark"></i></span>
+                        Livros
+                    </a>
                     <a class="nav-link {% if request.resolver_match.url_name == 'document-create' %}active{% endif %}" href="{% url 'reader:document-create' %}">
                         <span class="sb-nav-link-icon"><i class="fa-solid fa-file-circle-plus"></i></span>
                         Adicionar documento
+                    </a>
+                    <a class="nav-link {% if request.resolver_match.url_name == 'book-create' %}active{% endif %}" href="{% url 'reader:book-create' %}">
+                        <span class="sb-nav-link-icon"><i class="fa-solid fa-book-medical"></i></span>
+                        Adicionar livro
                     </a>
                     <div class="sb-sidenav-menu-heading">Integração</div>
                     <a class="nav-link" href="/api/" target="_blank">

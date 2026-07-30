@@ -1,26 +1,248 @@
+import hashlib
+import shutil
 import tempfile
 from pathlib import Path
 
 from celery import chain, shared_task
 from django.conf import settings
 from django.core.files import File
+from django.core.files.base import ContentFile
+from django.core.files.storage import default_storage
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import F, Sum
 from django.utils import timezone
+from django.utils.text import slugify
 
-from .models import AudioSegment, Document
+from .models import AIResult, AudioCache, AudioSegment, Book, Document
+from .services.extractors import (
+    ExtractionError,
+    create_pdf_slice,
+    source_type_for,
+    split_into_parts,
+)
+from .services.runtime_config import get_app_configuration
 from .services.streaming import (
     build_word_timings,
     map_spoken_word_timings,
     wav_duration,
 )
+from .services.ai import summarize_text, translate_text
 from .services.text_preparation import prepare_for_speech
 from .services.tts import split_text, synthesize_segment
+
+
+def _audio_cache_key(document, spoken_text):
+    payload = "\0".join(
+        (
+            document.voice.provider,
+            document.voice.code,
+            str(document.speed),
+            spoken_text,
+        )
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _synthesize_with_cache(document, segment, wav_path):
+    cache_key = _audio_cache_key(document, segment.spoken_text)
+    cached = AudioCache.objects.filter(cache_key=cache_key).first()
+    if cached and cached.audio_file and default_storage.exists(cached.audio_file.name):
+        with default_storage.open(cached.audio_file.name, "rb") as source:
+            with wav_path.open("wb") as destination:
+                shutil.copyfileobj(source, destination)
+        AudioCache.objects.filter(pk=cached.pk).update(
+            hit_count=F("hit_count") + 1,
+            last_used_at=timezone.now(),
+        )
+        return cached.word_timings
+
+    spoken_timings = synthesize_segment(
+        segment.spoken_text,
+        wav_path,
+        document.voice.code,
+        document.speed,
+        document.voice.provider,
+    )
+    duration = wav_duration(wav_path)
+    cache, created = AudioCache.objects.get_or_create(
+        cache_key=cache_key,
+        defaults={
+            "provider": document.voice.provider,
+            "voice_code": document.voice.code,
+            "speed": document.speed,
+            "duration_seconds": duration,
+            "word_timings": spoken_timings,
+        },
+    )
+    if created:
+        with wav_path.open("rb") as audio:
+            cache.audio_file.save(f"{cache_key}.wav", File(audio), save=True)
+    return spoken_timings
 
 
 def _delete_segment_files(document):
     for segment in document.segments.exclude(audio_file=""):
         segment.audio_file.delete(save=False)
+
+
+def _refresh_book_status(document):
+    # Book.status represents preparation of the playlist, not synthesis of every
+    # part. Audio is intentionally produced lazily as the reader advances.
+    return
+
+
+def _document_storage_names(document):
+    names = []
+    if document.original_file:
+        names.append(document.original_file.name)
+    if document.audio_file:
+        names.append(document.audio_file.name)
+    names.extend(
+        document.segments.exclude(audio_file="").values_list(
+            "audio_file", flat=True
+        )
+    )
+    return names
+
+
+@shared_task
+def prepare_book(book_id):
+    book = Book.objects.select_related("owner", "voice").get(pk=book_id)
+    if book.status == Book.Status.READY and book.parts.exists():
+        return {"book_id": book.pk, "parts": book.parts.count(), "reused": True}
+    book.status = Book.Status.PROCESSING
+    book.error_message = ""
+    book.save(update_fields=("status", "error_message", "updated_at"))
+    saved_part_files = []
+
+    try:
+        with book.original_file.open("rb") as source:
+            source_bytes = source.read()
+        source_name = Path(book.original_file.name).name
+        source_type = source_type_for(source_name)
+        configuration = get_app_configuration()
+        upload = ContentFile(source_bytes, name=source_name)
+        parts = split_into_parts(
+            upload,
+            configuration.book_part_characters,
+            max_pages=configuration.book_part_pages,
+        )
+        if not parts:
+            raise ExtractionError(
+                "Nenhum texto legível foi encontrado. "
+                "PDFs escaneados precisarão de OCR."
+            )
+
+        physical_parts = {}
+        if source_type == Document.SourceType.PDF:
+            for part in parts:
+                physical_parts[part.order] = create_pdf_slice(
+                    source_bytes,
+                    part.page_start,
+                    part.page_end,
+                )
+
+        old_part_files = [
+            storage_name
+            for old_part in book.parts.all()
+            for storage_name in _document_storage_names(old_part)
+        ]
+
+        with transaction.atomic():
+            book.parts.all().delete()
+            part_count = len(parts)
+            for part in parts:
+                document = Document(
+                    owner=book.owner,
+                    book=book,
+                    book_order=part.order,
+                    page_start=part.page_start,
+                    page_end=part.page_end,
+                    title=(
+                        f"{book.title} — Parte {part.order + 1}"
+                        if part_count > 1
+                        else book.title
+                    ),
+                    source_type=source_type,
+                    extracted_text=part.text,
+                    voice=book.voice,
+                    speed=book.speed,
+                    reading_mode=book.reading_mode,
+                    status=Document.Status.PENDING,
+                )
+                if part.order in physical_parts:
+                    safe_title = slugify(book.title) or f"livro-{book.pk}"
+                    filename = (
+                        f"{safe_title}-parte-{part.order + 1:04d}.pdf"
+                    )
+                    document.original_file.save(
+                        filename,
+                        ContentFile(physical_parts[part.order]),
+                        save=False,
+                    )
+                    saved_part_files.append(document.original_file.name)
+                document.save()
+
+            book.source_type = source_type
+            book.page_count = max(
+                (part.page_end or 0 for part in parts),
+                default=0,
+            )
+            book.char_count = sum(len(part.text) for part in parts)
+            book.status = Book.Status.READY
+            book.error_message = ""
+            book.save(
+                update_fields=(
+                    "source_type",
+                    "page_count",
+                    "char_count",
+                    "status",
+                    "error_message",
+                    "updated_at",
+                )
+            )
+        for storage_name in old_part_files:
+            if default_storage.exists(storage_name):
+                default_storage.delete(storage_name)
+        return {"book_id": book.pk, "parts": len(parts)}
+    except Exception as exc:
+        for storage_name in saved_part_files:
+            if default_storage.exists(storage_name):
+                default_storage.delete(storage_name)
+        Book.objects.filter(pk=book.pk).update(
+            status=Book.Status.FAILED,
+            error_message=str(exc)[:2000],
+            updated_at=timezone.now(),
+        )
+        raise
+
+
+def dispatch_book_preparation(book):
+    try:
+        return prepare_book.delay(book.pk)
+    except Exception:
+        return prepare_book.apply(args=(book.pk,))
+
+
+def ensure_book_audio_window(document):
+    """Queue a small initial audio window only for the selected book part."""
+    if not document.book_id:
+        return 0
+    claimed = Document.objects.filter(
+        pk=document.pk,
+        status=Document.Status.PENDING,
+        stream_is_building=False,
+    ).update(
+        status=Document.Status.PROCESSING,
+        stream_is_building=True,
+        error_message="",
+        updated_at=timezone.now(),
+    )
+    if not claimed:
+        return 0
+    document.refresh_from_db()
+    dispatch_audio_generation(document)
+    return 1
 
 
 @shared_task
@@ -35,13 +257,7 @@ def generate_stream_chunk(segment_id):
     try:
         with tempfile.TemporaryDirectory(prefix="projectlecture-chunk-") as temp_dir:
             wav_path = Path(temp_dir) / f"chunk-{segment.order:05d}.wav"
-            spoken_timings = synthesize_segment(
-                segment.spoken_text,
-                wav_path,
-                document.voice.code,
-                document.speed,
-                document.voice.provider,
-            )
+            spoken_timings = _synthesize_with_cache(document, segment, wav_path)
             duration = wav_duration(wav_path)
             previous_duration = (
                 AudioSegment.objects.filter(
@@ -103,6 +319,7 @@ def generate_stream_chunk(segment_id):
                 "updated_at",
             )
         )
+        _refresh_book_status(document)
         raise
 
 
@@ -110,26 +327,98 @@ def generate_stream_chunk(segment_id):
 def finalize_stream(document_id):
     document = Document.objects.get(pk=document_id)
     failed = document.segments.filter(status=AudioSegment.Status.FAILED).exists()
-    pending = document.segments.exclude(status=AudioSegment.Status.READY).exists()
-    if failed or pending:
+    unfinished = document.segments.exclude(status=AudioSegment.Status.READY).exists()
+    ready = document.segments.filter(status=AudioSegment.Status.READY).exists()
+    if failed:
         document.status = Document.Status.FAILED
         document.error_message = (
             "Um ou mais blocos da leitura não puderam ser preparados."
         )
-    else:
+    elif ready:
         total = (
-            document.segments.aggregate(total=Sum("duration_seconds"))["total"] or 0
+            document.segments.filter(
+                status=AudioSegment.Status.READY
+            ).aggregate(total=Sum("duration_seconds"))["total"]
+            or 0
         )
         document.duration_seconds = round(total)
         document.status = Document.Status.READY
-        document.completed_at = timezone.now()
         document.error_message = ""
+        document.completed_at = None if unfinished else timezone.now()
+    else:
+        document.status = Document.Status.PENDING
     document.stream_is_building = False
     document.save()
+    _refresh_book_status(document)
     return {
         "document_id": document.pk,
         "duration_seconds": document.duration_seconds,
         "status": document.status,
+    }
+
+
+def queue_stream_window(document_id, start_order=0):
+    """Claim and synthesize one bounded window of pending audio chunks."""
+    window_size = max(1, int(getattr(settings, "STREAM_PREFETCH_CHUNKS", 6)))
+    with transaction.atomic():
+        document = Document.objects.select_for_update().get(pk=document_id)
+        if document.stream_is_building:
+            return {"document_id": document.pk, "queued": 0, "building": True}
+        segment_ids = list(
+            document.segments.filter(
+                status=AudioSegment.Status.PENDING,
+                order__gte=max(0, int(start_order or 0)),
+            )
+            .order_by("order")
+            .values_list("pk", flat=True)[:window_size]
+        )
+        if not segment_ids:
+            return {"document_id": document.pk, "queued": 0, "building": False}
+        AudioSegment.objects.filter(pk__in=segment_ids).update(
+            status=AudioSegment.Status.PROCESSING
+        )
+        document.stream_is_building = True
+        document.status = (
+            Document.Status.READY
+            if document.segments.filter(status=AudioSegment.Status.READY).exists()
+            else Document.Status.PROCESSING
+        )
+        document.error_message = ""
+        document.save(
+            update_fields=(
+                "stream_is_building",
+                "status",
+                "error_message",
+                "updated_at",
+            )
+        )
+
+    workflow = chain(
+        *[generate_stream_chunk.si(segment_id) for segment_id in segment_ids],
+        finalize_stream.si(document_id),
+    )
+    try:
+        result = workflow.apply_async()
+    except Exception:
+        AudioSegment.objects.filter(
+            pk__in=segment_ids,
+            status=AudioSegment.Status.PROCESSING,
+        ).update(status=AudioSegment.Status.PENDING)
+        Document.objects.filter(pk=document_id).update(
+            stream_is_building=False,
+            status=Document.Status.READY
+            if AudioSegment.objects.filter(
+                document_id=document_id,
+                status=AudioSegment.Status.READY,
+            ).exists()
+            else Document.Status.PENDING,
+            updated_at=timezone.now(),
+        )
+        raise
+    return {
+        "document_id": document_id,
+        "queued": len(segment_ids),
+        "workflow_id": result.id,
     }
 
 
@@ -181,19 +470,16 @@ def generate_audio(document_id):
                     for index, segment in enumerate(text_segments)
                 ]
             )
-            # MySQL does not guarantee that bulk_create populates primary keys.
-            # Reload the rows before their IDs are passed to Celery.
-            segments = list(document.segments.order_by("order"))
-
-        workflow = chain(
-            *[generate_stream_chunk.si(segment.pk) for segment in segments],
-            finalize_stream.si(document.pk),
+        document.stream_is_building = False
+        document.save(
+            update_fields=("stream_is_building", "updated_at")
         )
-        result = workflow.apply_async()
+        window = queue_stream_window(document.pk)
         return {
             "document_id": document.pk,
-            "chunks": len(segments),
-            "workflow_id": result.id,
+            "chunks": len(text_segments),
+            "queued": window["queued"],
+            "workflow_id": window.get("workflow_id"),
         }
     except Exception as exc:
         document.status = Document.Status.FAILED
@@ -207,6 +493,7 @@ def generate_audio(document_id):
                 "updated_at",
             )
         )
+        _refresh_book_status(document)
         raise
 
 
@@ -215,3 +502,52 @@ def dispatch_audio_generation(document):
         return generate_audio.delay(document.pk)
     except Exception:
         return generate_audio.apply(args=(document.pk,))
+
+
+@shared_task
+def generate_ai_result(result_id):
+    result = AIResult.objects.select_related("document", "book").get(pk=result_id)
+    result.status = AIResult.Status.PROCESSING
+    result.error_message = ""
+    result.save(update_fields=("status", "error_message"))
+    try:
+        if result.book_id:
+            parts = result.book.parts.order_by("book_order")
+            source_text = "\n\n".join(part.extracted_text for part in parts)
+            title = result.book.title
+        else:
+            source_text = result.document.extracted_text
+            title = result.document.title
+
+        if result.operation == AIResult.Operation.SUMMARY:
+            content, model_name = summarize_text(source_text, title)
+        else:
+            content, model_name = translate_text(
+                source_text,
+                result.target_language,
+            )
+        result.content = content
+        result.model_name = model_name
+        result.status = AIResult.Status.READY
+        result.completed_at = timezone.now()
+        result.save(
+            update_fields=(
+                "content",
+                "model_name",
+                "status",
+                "completed_at",
+            )
+        )
+        return {"result_id": result.pk, "status": result.status}
+    except Exception as exc:
+        result.status = AIResult.Status.FAILED
+        result.error_message = str(exc)[:2000]
+        result.save(update_fields=("status", "error_message"))
+        raise
+
+
+def dispatch_ai_generation(result):
+    try:
+        return generate_ai_result.delay(result.pk)
+    except Exception:
+        return generate_ai_result.apply(args=(result.pk,))

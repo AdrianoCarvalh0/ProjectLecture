@@ -1,9 +1,11 @@
-from django.conf import settings
+from django.db import transaction
 from rest_framework import serializers
 
 from .models import AudioSegment, Document, ReadingProgress, Voice
 from .services.community import document_creation_limit_error
 from .services.extractors import ExtractionError, extract_text, source_type_for
+from .services.runtime_config import get_app_configuration
+from .services.usage import reading_limit_error, register_reading
 from .tasks import dispatch_audio_generation
 
 
@@ -115,6 +117,10 @@ class DocumentSerializer(serializers.ModelSerializer):
         model = Document
         fields = (
             "id",
+            "book",
+            "book_order",
+            "page_start",
+            "page_end",
             "title",
             "source_type",
             "source_label",
@@ -179,21 +185,26 @@ class DocumentCreateSerializer(serializers.Serializer):
             limit_error = document_creation_limit_error(request.user)
             if limit_error:
                 raise serializers.ValidationError(limit_error)
+            monthly_error = reading_limit_error(request.user)
+            if monthly_error:
+                raise serializers.ValidationError(monthly_error)
+        configuration = get_app_configuration()
         text = (attrs.get("text") or "").strip()
         uploaded = attrs.get("original_file")
         if bool(text) == bool(uploaded):
             raise serializers.ValidationError(
                 "Informe exatamente uma origem: texto ou arquivo."
             )
-        if len(text) > settings.MAX_CHARACTERS_PER_DOCUMENT:
+        if len(text) > configuration.book_part_characters:
             raise serializers.ValidationError(
-                f"O texto excede {settings.MAX_CHARACTERS_PER_DOCUMENT} caracteres."
+                "O texto deve ser enviado como livro porque excede "
+                f"{configuration.book_part_characters:,} caracteres."
             )
         if uploaded:
             extension = source_type_for(uploaded.name)
             if extension == "text":
                 raise serializers.ValidationError("Envie PDF, DOCX, EPUB ou TXT.")
-            if uploaded.size > settings.MAX_DOCUMENT_SIZE_MB * 1024 * 1024:
+            if uploaded.size > configuration.max_document_size_mb * 1024 * 1024:
                 raise serializers.ValidationError("O arquivo excede o tamanho permitido.")
         return attrs
 
@@ -208,19 +219,23 @@ class DocumentCreateSerializer(serializers.Serializer):
             uploaded.seek(0)
         if not text:
             raise serializers.ValidationError("Nenhum texto legível foi encontrado.")
-        if len(text) > settings.MAX_CHARACTERS_PER_DOCUMENT:
+        configuration = get_app_configuration()
+        if len(text) > configuration.book_part_characters:
             raise serializers.ValidationError(
-                f"O conteúdo extraído excede {settings.MAX_CHARACTERS_PER_DOCUMENT} caracteres."
+                "O conteúdo deve ser enviado como livro porque excede "
+                f"{configuration.book_part_characters:,} caracteres."
             )
 
-        document = Document.objects.create(
-            owner=self.context["request"].user,
-            extracted_text=text,
-            original_file=uploaded,
-            source_type=source_type_for(uploaded.name) if uploaded else Document.SourceType.TEXT,
-            status=Document.Status.PENDING,
-            **validated_data,
-        )
+        with transaction.atomic():
+            document = Document.objects.create(
+                owner=self.context["request"].user,
+                extracted_text=text,
+                original_file=uploaded,
+                source_type=source_type_for(uploaded.name) if uploaded else Document.SourceType.TEXT,
+                status=Document.Status.PENDING,
+                **validated_data,
+            )
+            register_reading(self.context["request"].user, len(text))
         dispatch_audio_generation(document)
         return document
 

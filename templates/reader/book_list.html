@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Livros · ProjectLecture{% endblock %}
+{% block content %}
+<div class="page-header">
+    <div><p class="eyebrow">Estante</p><h1>Seus livros</h1><p>Livros extensos divididos internamente, com reprodução contínua.</p></div>
+    <a class="btn btn-primary" href="{% url 'reader:book-create' %}"><i class="fa-solid fa-book-medical me-2"></i>Adicionar livro</a>
+</div>
+<div class="filter-bar">
+    <form method="get" class="row g-2 align-items-center w-100">
+        <div class="col-md">
+            <div class="input-icon"><i class="fa-solid fa-magnifying-glass"></i><input class="form-control" name="q" value="{{ request.GET.q }}" placeholder="Buscar livro por título..."></div>
+        </div>
+        <div class="col-md-auto"><button class="btn btn-outline-secondary" type="submit">Buscar</button></div>
+    </form>
+</div>
+{% if books %}
+<div class="document-grid library-grid">
+    {% for book in books %}
+    <a class="document-card book-card" href="{{ book.get_absolute_url }}">
+        <div class="document-card-top">
+            <span class="file-icon pdf"><i class="fa-solid fa-book-bookmark"></i></span>
+            <span class="status-badge status-{{ book.status }}"><span></span>{{ book.get_status_display }}</span>
+        </div>
+        <h3>{{ book.title }}</h3>
+        <p>{{ book.parts.count }} parte{{ book.parts.count|pluralize }} · {{ book.page_count }} página{{ book.page_count|pluralize }}</p>
+        <div class="progress-track"><span style="width: {{ book.progress_percent }}%"></span></div>
+        <div class="document-card-meta"><span>{{ book.progress_percent }}% ouvido</span><span>{{ book.created_at|date:"d/m/Y" }}</span></div>
+    </a>
+    {% endfor %}
+</div>
+{% else %}
+<div class="section-card empty-state">
+    <div class="empty-icon"><i class="fa-solid fa-book-open-reader"></i></div>
+    <h3>Sua estante está vazia</h3>
+    <p>Envie um livro; o ProjectLecture cuidará das divisões internas e da playlist.</p>
+    <a class="btn btn-primary" href="{% url 'reader:book-create' %}">Adicionar livro</a>
+</div>
+{% endif %}
+{% endblock %}
